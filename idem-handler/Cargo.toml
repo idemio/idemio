@@ -1,0 +1,11 @@
+[package]
+name = "idem-handler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+idem-handler-config = {path = "../idem-handler-config" }
+idem-handler-macro = {path = "../idem-handler-macro" }
+
+[dev-dependencies]
+tokio = { version = "1.44.1" , features = ["macros", "rt"]}
