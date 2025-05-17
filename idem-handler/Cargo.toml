@@ -11,7 +11,7 @@ strip = "symbols"
 opt-level = 3
 
 [dependencies]
-idem-handler-config = {path = "../idem-handler-config" }
+idem-handler-config = {path = "../idem-handler-config", version = "0.1.0"}
 async-trait = "0.1.88"
 fnv = "1.0.7"
 
