@@ -4,6 +4,14 @@ use crate::status::Code;
 use fnv::FnvHashMap;
 use std::sync::Arc;
 
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub enum ExecutorError {
+    HandlerStatusError,
+    HandlerExceptionError,
+    HandlerChainError,
+    MissingHandlerError
+}
+
 pub struct HandlerExecutor<Input, Output, Metadata> {
     pub handlers: FnvHashMap<u64, Arc<dyn Handler<Input, Output, Metadata> + Send>>,
 }
@@ -34,7 +42,7 @@ where
         handler_chain: &Vec<u64>,
         input: Input,
         metadata: Option<Metadata>,
-    ) -> Result<Output, ()> {
+    ) -> Result<Output, ExecutorError> {
         let mut exchange: Exchange<Input, Output, Metadata> = Exchange::new();
         exchange.save_input(input);
         if let Some(metadata) = metadata {
@@ -55,18 +63,19 @@ where
                                 | Code::TIMEOUT
                                 | Code::REQUEST_COMPLETED,
                         ) {
-                            todo!("Handle error in chain")
+                            return Err(ExecutorError::HandlerStatusError)
                         }
-                        // continue handler execution
                     }
-                    Err(_e) => {
-                        todo!("Handle handler failed execution")
+                    Err(_error) => {
+                        return Err(ExecutorError::HandlerExceptionError);
                     },
                 }
+            } else {
+                return Err(ExecutorError::MissingHandlerError);
             }
         }
 
-        todo!("Handle handler chain not completing request")
+       Err(ExecutorError::HandlerChainError)
     }
 }
 
@@ -75,7 +84,7 @@ mod test {
     use std::sync::Arc;
     use async_trait::async_trait;
     use crate::exchange::Exchange;
-    use crate::executor::HandlerExecutor;
+    use crate::executor::{ExecutorError, HandlerExecutor};
     use crate::handler::Handler;
     use crate::status::{Code, HandlerExecutionError, HandlerStatus};
 
@@ -141,9 +150,29 @@ mod test {
         assert_eq!("Goodbye Handler!", result);
     }
 
-    #[test]
-    fn test_invalid_handler_chain() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_invalid_handler_chain() {
+        let mut handler_executor: HandlerExecutor<String, String, ()> = HandlerExecutor::new();
 
+        // load handlers in any order.
+        handler_executor.add_handler(1, Arc::new(IdempotentHandler1));
+        handler_executor.add_handler(2, Arc::new(IdempotentHandler2));
+        handler_executor.add_handler(3, Arc::new(RequestCompletingHandler));
+        handler_executor.add_handler(4, Arc::new(ModifyBodyHandler));
+
+        // choose the handlers to be executed in order.
+        let chain_for_request: Vec<u64> = vec![1, 1];
+        let my_input = String::from("Hello Handler!");
+
+        let result = handler_executor.handle(&chain_for_request, my_input, None).await;
+        match result {
+            Ok(_) => {
+                assert!(false, "Execution should have failed!")
+            }
+            Err(e) => {
+                assert_eq!(ExecutorError::HandlerChainError, e);
+            }
+        }
     }
 
 

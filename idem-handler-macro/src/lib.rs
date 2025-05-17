@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{DeriveInput, Field, PathArguments, Type, parse_macro_input};
+use syn::{Field, Type, parse_macro_input};
 
 #[proc_macro_derive(ConfigurableHandler)]
 pub fn derive_init_function(input: TokenStream) -> TokenStream {
