@@ -13,7 +13,7 @@ impl Display for HandlerExecutionError {
 }
 
 pub struct HandlerStatus {
-    code: Code,
+    pub(crate) code: Code,
     message: Option<&'static str>,
     details: Option<&'static str>,
 }

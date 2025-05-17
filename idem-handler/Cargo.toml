@@ -5,7 +5,8 @@ edition = "2024"
 
 [dependencies]
 idem-handler-config = {path = "../idem-handler-config" }
-idem-handler-macro = {path = "../idem-handler-macro" }
+async-trait = "0.1.88"
+fnv = "1.0.7"
 
 [dev-dependencies]
 tokio = { version = "1.44.1" , features = ["macros", "rt"]}

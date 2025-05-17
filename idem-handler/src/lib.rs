@@ -6,4 +6,3 @@ pub mod exchange;
 pub mod executor;
 pub mod factory;
 
-pub type HandlerOutput<'a> = Pin<Box<dyn Future<Output = Result<HandlerStatus, HandlerExecutionError>> + Send + 'a>>;

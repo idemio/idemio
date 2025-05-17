@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["idem-handler", "idem-handler-config", "idem-handler-error", "idem-handler-macro"]
+members = ["idem-handler", "idem-handler-config", "idem-handler-macro"]
 
