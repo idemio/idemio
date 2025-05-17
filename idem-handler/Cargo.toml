@@ -2,6 +2,13 @@
 name = "idem-handler"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+description = "Common handler mechanism used in other idemio products."
+authors = [" Kalev Gonvick kalev.gonvick@idemio.dev"]
+
+[profile.release]
+strip = "symbols"
+opt-level = 3
 
 [dependencies]
 idem-handler-config = {path = "../idem-handler-config" }

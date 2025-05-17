@@ -2,12 +2,14 @@
 name = "idem-handler-macro"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+authors = [" Kalev Gonvick kalev.gonvick@idemio.dev"]
+description = "Helper macro to generate methods for structs that implement idem-handler traits."
 
 [lib]
 proc-macro = true
 
 [dependencies]
-idem-handler-config = {path = "../idem-handler-config" }
 syn = "2.0"
 quote = "1.0"
 
