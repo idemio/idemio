@@ -1,36 +1,46 @@
+use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, Not};
 
 #[derive(Debug)]
-pub struct HandlerExecutionError {
-    message: String,
+pub struct HandlerExecutionError<'a> {
+    pub message: Cow<'a, str>,
 }
 
-impl Display for HandlerExecutionError {
+impl Display for HandlerExecutionError<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Fatal error: {}", self.message)
     }
 }
 
-pub struct HandlerStatus {
+#[derive(Debug)]
+pub struct HandlerStatus<'a> {
     pub(crate) code: Code,
-    message: Option<&'static str>,
-    details: Option<&'static str>,
+    message: Option<Cow<'a, str>>,
+    details: Option<Cow<'a, str>>,
 }
 
-impl HandlerStatus {
+impl<'a> HandlerStatus<'a> {
     pub fn code(&self) -> Code {
         self.code
     }
-    pub fn message(&self) -> &'static str {
-        self.message.unwrap_or_else(|| "")
+    pub fn message(&self) -> &str {
+        match &self.message {
+            Some(cow) => cow.as_ref(),
+            None => "",
+        }
     }
 
-    pub fn details(&self) -> &'static str {
-        self.details.unwrap_or_else(|| "")
+
+    pub fn details(&self) -> &str {
+        match &self.details {
+            Some(cow) => cow.as_ref(),
+            None => "",
+        }
     }
 
-    pub fn new(code: Code) -> HandlerStatus {
+
+    pub fn new(code: Code) -> HandlerStatus<'a> {
         Self {
             code,
             message: None,
@@ -38,18 +48,20 @@ impl HandlerStatus {
         }
     }
 
-    pub fn set_message(mut self, message: &'static str) -> HandlerStatus {
-        self.message = Some(message);
+    pub fn set_message(mut self, message: &'static str) -> HandlerStatus<'a> {
+        self.message = Some(Cow::Borrowed(message));
         self
     }
 
-    pub fn set_details(mut self, description: &'static str) -> HandlerStatus {
-        self.details = Some(description);
+    pub fn set_details(mut self, description: &'static str) -> HandlerStatus<'a> {
+        self.details = Some(Cow::Borrowed(description));
         self
     }
+
 }
 
 #[derive(Clone, Copy)]
+#[derive(Debug)]
 pub struct Code(pub i32);
 
 impl Code {
@@ -75,6 +87,14 @@ impl Code {
 
     pub fn all_flags_clear(&self, flags: Code) -> bool {
         self.0 & flags.0 == 0
+    }
+    
+    pub fn is_error(&self) -> bool {
+        self.any_flags(
+            Code::CLIENT_ERROR
+                | Code::SERVER_ERROR
+                | Code::TIMEOUT
+        )
     }
 }
 
