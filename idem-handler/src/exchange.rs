@@ -2,23 +2,26 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-pub struct Exchange<Input, Output, Metadata> {
-    metadata: Option<Metadata>,
-    input: Option<Input>,
-    output: Option<Output>,
-    input_listeners: Vec<Callback<Input>>,
-    output_listeners: Vec<Callback<Output>>,
+pub struct Exchange<I, O, M> {
+    uuid: String,
+    metadata: Option<M>,
+    input: Option<I>,
+    output: Option<O>,
+    input_listeners: Vec<Callback<I>>,
+    output_listeners: Vec<Callback<O>>,
     attachments: Attachments,
 }
 
-impl<Input, Output, Metadata> Exchange<Input, Output, Metadata>
+impl<I, O, M> Exchange<I, O, M>
 where
-    Input: Send + 'static,
-    Output: Send + 'static,
-    Metadata: Send,
+    I: Send + Sync,
+    O: Send + Sync,
+    M: Send + Sync,
 {
     pub fn new() -> Self {
+        let uuid = uuid::Uuid::new_v4().to_string();
         Self {
+            uuid,
             metadata: None,
             input: None,
             output: None,
@@ -27,8 +30,12 @@ where
             attachments: Attachments::new(),
         }
     }
+    
+    pub fn uuid(&self) -> &str {
+        &self.uuid
+    }
 
-    pub fn add_metadata(&mut self, metadata: Metadata) {
+    pub fn add_metadata(&mut self, metadata: M) {
         self.metadata = Some(metadata);
     }
 
@@ -42,14 +49,14 @@ where
 
     pub fn add_input_listener(
         &mut self,
-        callback: impl FnMut(&mut Input, &mut Attachments) + Send + 'static,
+        callback: impl FnMut(&mut I, &mut Attachments) + Send + 'static,
     ) {
         self.input_listeners.push(Callback::new(callback));
     }
 
     pub fn add_output_listener(
         &mut self,
-        callback: impl FnMut(&mut Output, &mut Attachments) + Send + 'static,
+        callback: impl FnMut(&mut O, &mut Attachments) + Send + 'static,
     ) {
         self.output_listeners.push(Callback::new(callback));
     }
@@ -80,25 +87,25 @@ where
         }
     }
 
-    pub fn save_input(&mut self, request: Input) {
+    pub fn save_input(&mut self, request: I) {
         self.input = Some(request);
     }
 
-    pub fn input(&self) -> Result<&Input, ExchangeError> {
+    pub fn input(&self) -> Result<&I, ExchangeError> {
         match &self.input {
             Some(out) => Ok(out),
             None => Err(ExchangeError::InputReadError("No input available".to_string())),
         }
     }
 
-    pub fn input_mut(&mut self) -> Result<&mut Input, ExchangeError> {
+    pub fn input_mut(&mut self) -> Result<&mut I, ExchangeError> {
         match &mut self.input {
             Some(out) => Ok(out),
             None => Err(ExchangeError::InputReadError("No input available".to_string())),
         }
     }
 
-    pub fn take_request(&mut self) -> Result<Input, ExchangeError> {
+    pub fn take_request(&mut self) -> Result<I, ExchangeError> {
         if let Ok(_) = self.execute_input_callbacks() {
             self.input
                 .take()
@@ -110,11 +117,11 @@ where
         }
     }
 
-    pub fn save_output(&mut self, response: Output) {
+    pub fn save_output(&mut self, response: O) {
         self.output = Some(response);
     }
 
-    pub fn output(&self) -> Result<&Output, ExchangeError> {
+    pub fn output(&self) -> Result<&O, ExchangeError> {
         match &self.output {
             Some(out) => Ok(out),
             None => Err(ExchangeError::OutputReadError(
@@ -123,7 +130,7 @@ where
         }
     }
 
-    pub fn output_mut(&mut self) -> Result<&mut Output, ExchangeError> {
+    pub fn output_mut(&mut self) -> Result<&mut O, ExchangeError> {
         match &mut self.output {
             Some(out) => Ok(out),
             None => Err(ExchangeError::OutputReadError(
@@ -132,7 +139,7 @@ where
         }
     }
 
-    pub fn take_output(&mut self) -> Result<Output, ExchangeError> {
+    pub fn take_output(&mut self) -> Result<O, ExchangeError> {
         if let Ok(_) = self.execute_output_callbacks() {
             self.output
                 .take()
@@ -156,12 +163,12 @@ impl Attachments {
         }
     }
 
-    pub fn add_attachment<K>(&mut self, key: AttachmentKey, value: Box<dyn Any + Send>)
+    pub fn add_attachment<K>(&mut self, key: AttachmentKey, value: K)
     where
         K: Send + 'static,
     {
         let type_id = TypeId::of::<K>();
-        self.attachments.insert((key, type_id), value);
+        self.attachments.insert((key, type_id), Box::new(value));
     }
 
     pub fn attachment<K>(&self, key: AttachmentKey) -> Option<&K>
@@ -216,7 +223,7 @@ impl Display for ExchangeError {
 impl std::error::Error for ExchangeError {}
 
 #[derive(PartialOrd, PartialEq, Hash, Eq)]
-pub struct AttachmentKey(pub &'static str);
+pub struct AttachmentKey(pub String);
 
 pub struct Callback<T> {
     callback: Box<dyn FnMut(&mut T, &mut Attachments) + Send>,
@@ -224,7 +231,7 @@ pub struct Callback<T> {
 
 impl<T> Callback<T>
 where
-    T: Send + 'static,
+    T: Send,
 {
     pub fn new(callback: impl FnMut(&mut T, &mut Attachments) + Send + 'static) -> Self {
         Self {
