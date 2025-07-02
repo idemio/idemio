@@ -4,12 +4,12 @@
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/idem-handler-config/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/idem-handler-error/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/idem-handler-macro/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/idem-handler/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/idem-handler/benches" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/idem-handler/examples" isTestSource="false" />
-      <excludeFolder url="file://$MODULE_DIR$/idem-handler/target" />
+      <sourceFolder url="file://$MODULE_DIR$/idemio-macro/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/idemio/benches" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/idemio/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/idemio/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
+      <excludeFolder url="file://$MODULE_DIR$/idemio/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

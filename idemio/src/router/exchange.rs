@@ -153,7 +153,7 @@ where
 }
 
 pub struct Attachments {
-    attachments: HashMap<(AttachmentKey, TypeId), Box<dyn Any + Send>>,
+    attachments: HashMap<(AttachmentKey, TypeId), Box<dyn Any + Send + Sync>>,
 }
 
 impl Attachments {
@@ -165,7 +165,7 @@ impl Attachments {
 
     pub fn add_attachment<K>(&mut self, key: AttachmentKey, value: K)
     where
-        K: Send + 'static,
+        K: Send + Sync + 'static,
     {
         let type_id = TypeId::of::<K>();
         self.attachments.insert((key, type_id), Box::new(value));

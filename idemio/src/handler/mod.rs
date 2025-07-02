@@ -1,11 +1,16 @@
-use std::sync::Arc;
-use std::time::Duration;
+pub mod registry;
+pub mod config;
+
+use crate::config::config::HandlerConfig;
+use crate::router::exchange::Exchange;
+use crate::status::{HandlerExecutionError, HandlerStatus};
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::time::sleep;
-use crate::config::config::HandlerConfig;
-use crate::exchange::Exchange;
-use crate::status::{HandlerExecutionError, HandlerStatus};
+type CoreHandler<I, O, M> = dyn Handler<I, O, M> + Send + Sync;
+pub type SharedHandler<I, O, M> = Arc<CoreHandler<I, O, M>>;
 
 #[async_trait]
 pub trait Handler<I, O, M>: Send
@@ -20,55 +25,56 @@ where
     ) -> Result<HandlerStatus, HandlerExecutionError>;
 }
 
-pub struct ConfigurableHandler<I, O, M, C> 
+pub struct IdemioHandler<I, O, M, C>
 where
     C: Send + Sync + Default + DeserializeOwned,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
 {
-    inner: Arc<dyn Handler<I, O, M> + Send + Sync>,
-    config: HandlerConfig<C>
+    inner: SharedHandler<I, O, M>,
+    config: HandlerConfig<C>,
 }
 
-impl<I, O, M, C> ConfigurableHandler<I, O, M, C> 
+impl<I, O, M, C> IdemioHandler<I, O, M, C>
 where
     C: Send + Sync + Default + DeserializeOwned,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
 {
-    pub fn new(inner: Arc<dyn Handler<I, O, M> + Send + Sync>, config: HandlerConfig<C>) -> Self {
-        Self {
-            inner,
-            config
-        }
+    pub fn new(inner: SharedHandler<I, O, M>, config: HandlerConfig<C>) -> Self {
+        Self { inner, config }
     }
-    
+
     pub fn config(&self) -> &HandlerConfig<C> {
         &self.config
     }
-    
+
     pub fn name(&self) -> &str {
         &self.config.id()
     }
-    
-    async fn exec_with_timeout(&self, exchange: &mut Exchange<I, O, M>) -> Result<HandlerStatus, HandlerExecutionError> {
+
+    async fn exec_with_timeout(
+        &self,
+        exchange: &mut Exchange<I, O, M>,
+    ) -> Result<HandlerStatus, HandlerExecutionError> {
         match self.config.timeout() {
             None => self.inner.exec(exchange).await,
             Some(duration) => {
-                let duration = std::time::Duration::from_millis(duration);
+                let duration = Duration::from_millis(duration);
                 match tokio::time::timeout(duration, self.inner.exec(exchange)).await {
                     Ok(result) => result,
                     Err(_) => {
                         // Create a timeout error
-                        let error_msg = format!("Handler '{}' timed out after {}ms",
-                                                self.config.id(),
-                                                self.config.timeout().unwrap_or(0));
+                        let error_msg = format!(
+                            "Handler '{}' timed out after {}ms",
+                            self.config.id(),
+                            self.config.timeout().unwrap_or(0)
+                        );
                         Err(HandlerExecutionError {
                             message: error_msg.into(),
                         })
-
                     }
                 }
             }
@@ -79,15 +85,17 @@ where
         &self,
         exchange: &mut Exchange<I, O, M>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
-        let max_attempts = self.config.retry_count().map(|attempt_count| attempt_count + 1).unwrap_or(1);
-        let mut last_error = None;
+        let max_attempts = self
+            .config
+            .retry_count()
+            .map(|attempt_count| attempt_count + 1)
+            .unwrap_or(1);
 
+        let mut last_error = None;
         for attempt in 1..=max_attempts {
-            let retry_delay = self.config.retry_delay().unwrap_or(0);
-            let retry_delay = Duration::from_millis(retry_delay);
+            let retry_delay = Duration::from_millis(self.config.retry_delay().unwrap_or(0));
             match self.exec_with_timeout(exchange).await {
                 Ok(status) => {
-                    // If it's an error status code but not a fatal error, we might want to retry
                     if status.code.is_error() && attempt < max_attempts {
                         if !retry_delay.is_zero() {
                             sleep(retry_delay).await;
@@ -98,7 +106,6 @@ where
                 }
                 Err(error) => {
                     last_error = Some(error);
-                    // Wait before retry (except on the last attempt)
                     if attempt < max_attempts && !retry_delay.is_zero() {
                         sleep(retry_delay).await;
                     }
@@ -108,43 +115,48 @@ where
 
         // Return the last error if all retries failed
         Err(last_error.unwrap_or_else(|| HandlerExecutionError {
-            message: format!("Handler '{}' failed after {} attempts",
-                             self.config.id(), max_attempts).into(),
+            message: format!(
+                "Handler '{}' failed after {} attempts",
+                self.config.id(),
+                max_attempts
+            )
+            .into(),
         }))
     }
-
 }
 
 #[async_trait]
-impl<I, O, M, C> Handler<I, O, M> for ConfigurableHandler<I, O, M, C> 
+impl<I, O, M, C> Handler<I, O, M> for IdemioHandler<I, O, M, C>
 where
     C: Send + Sync + Default + DeserializeOwned,
-    I: Send + Sync + 'static,
-    O: Send + Sync + 'static,
-    M: Send + Sync + 'static
+    I: Send + Sync,
+    O: Send + Sync,
+    M: Send + Sync,
 {
-    async fn exec(&self, exchange: &mut Exchange<I, O, M>) -> Result<HandlerStatus, HandlerExecutionError> {
+    async fn exec(
+        &self,
+        exchange: &mut Exchange<I, O, M>,
+    ) -> Result<HandlerStatus, HandlerExecutionError> {
         if !self.config.enabled() {
             return Ok(HandlerStatus::new(crate::status::Code::DISABLED));
         }
-        
+
         self.exec_with_retry(exchange).await
     }
-} 
-
+}
 
 #[cfg(test)]
 mod test {
+    use crate::config::config::{HandlerConfig, HandlerConfigBuilder};
+    use crate::router::exchange::Exchange;
+    use crate::handler::{Handler, IdemioHandler};
+    use crate::status::{Code, HandlerExecutionError, HandlerStatus};
+    use async_trait::async_trait;
+    use serde::{Deserialize, Serialize};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
-    use async_trait::async_trait;
-    use serde::{Deserialize, Serialize};
     use tokio::time::Instant;
-    use crate::config::config::{HandlerConfig, HandlerConfigBuilder};
-    use crate::exchange::Exchange;
-    use crate::handler::{ConfigurableHandler, Handler};
-    use crate::status::{Code, HandlerExecutionError, HandlerStatus};
 
     // Test configuration struct
     #[derive(Debug, Default, Serialize, Deserialize)]
@@ -270,15 +282,13 @@ mod test {
 
     fn create_enabled_config() -> HandlerConfig<TestConfig> {
         let mut binding = HandlerConfigBuilder::<TestConfig>::new();
-        binding.id("enabled_handler".to_string())
-            .enabled(true);
+        binding.id("enabled_handler".to_string()).enabled(true);
         binding.build()
     }
 
     fn create_disabled_config() -> HandlerConfig<TestConfig> {
         let mut binding = HandlerConfigBuilder::<TestConfig>::new();
-        binding.id("disabled".to_string())
-            .enabled(false);
+        binding.id("disabled".to_string()).enabled(false);
         binding.build()
     }
 
@@ -287,7 +297,7 @@ mod test {
         // Arrange
         let handler = Arc::new(SuccessHandler);
         let config = create_enabled_config();
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -307,7 +317,7 @@ mod test {
         // Arrange
         let handler = Arc::new(SuccessHandler);
         let config = create_disabled_config();
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -327,7 +337,7 @@ mod test {
         // Arrange
         let handler = Arc::new(FailureHandler);
         let config = create_enabled_config();
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -346,7 +356,7 @@ mod test {
         let mut config = create_enabled_config();
         config.set_retry_count(Some(3));
         config.set_retry_delay(Some(10)); // Short delay for testing
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -368,7 +378,7 @@ mod test {
         let mut config = create_enabled_config();
         config.set_retry_count(Some(2)); // Only allow 2 retries (3 total attempts)
         config.set_retry_delay(Some(1)); // Very short delay
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -386,7 +396,7 @@ mod test {
         let handler = Arc::new(SlowHandler::new(50)); // 50ms delay
         let mut config = create_enabled_config();
         config.set_timeout(Some(200)); // 200ms timeout
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -405,7 +415,7 @@ mod test {
         let mut config = create_enabled_config();
         config.set_id("test_handler".to_string());
         config.set_timeout(Some(50)); // 50ms timeout
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -429,7 +439,7 @@ mod test {
         let mut config = create_enabled_config();
         config.set_retry_count(Some(2));
         config.set_retry_delay(Some(10));
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -448,7 +458,7 @@ mod test {
         let handler = Arc::new(ErrorStatusHandler::new(Code::CONTINUE));
         let mut config = create_enabled_config();
         config.set_retry_count(Some(2));
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -469,7 +479,7 @@ mod test {
         // Arrange
         let handler = Arc::new(FailureHandler);
         let config = create_enabled_config(); // No retry count set
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -485,7 +495,7 @@ mod test {
         // Arrange
         let handler = Arc::new(SlowHandler::new(100)); // 100ms delay
         let config = create_enabled_config(); // No timeout set
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -505,7 +515,7 @@ mod test {
         let mut config = create_enabled_config();
         config.set_retry_count(Some(2));
         config.set_retry_delay(Some(0)); // No delay between retries
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -529,7 +539,7 @@ mod test {
         config.set_timeout(Some(1000)); // 1 second timeout
         config.set_retry_count(Some(3)); // 3 retries
         config.set_retry_delay(Some(20)); // 20ms delay
-        let configurable_handler = ConfigurableHandler::new(handler, config);
+        let configurable_handler = IdemioHandler::new(handler, config);
         let mut exchange = create_test_exchange();
 
         // Act
@@ -543,5 +553,4 @@ mod test {
         let output = exchange.output().unwrap();
         assert_eq!(output, "retry success: test_input");
     }
-
 }
