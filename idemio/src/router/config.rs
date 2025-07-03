@@ -8,7 +8,16 @@ pub use crate::handler::config::{ChainId, Executable, HandlerId};
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum PathSegment {
     Static(String),
-    Any(String),
+    Any,
+}
+
+impl Display for PathSegment {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathSegment::Static(s) => write!(f, "{}", s),
+            PathSegment::Any => write!(f, "*"),
+        }
+    }
 }
 
 impl FromStr for PathSegment {
@@ -16,7 +25,7 @@ impl FromStr for PathSegment {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s == "*" {
-            Ok(PathSegment::Any(s.to_string()))
+            Ok(PathSegment::Any)
         } else {
             Ok(PathSegment::Static(s.to_string()))
         }

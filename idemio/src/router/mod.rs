@@ -76,6 +76,7 @@ where
     route_table: DynamicRouteTable<I, O, M>,
 }
 
+
 impl<R, I, O, M, F> IdemioRouter<R, I, O, M, F>
 where
     R: Send + Sync,
@@ -104,7 +105,7 @@ where
     }
 
     fn parse_config(&mut self, registry: &HandlerRegistry<I, O, M>, router_config: &RouterConfig) -> Result<(), ()> {
-        
+
         // Build chains
         for (chain_id, handlers) in router_config.chains.iter() {
             let chain_id = chain_id.clone();
@@ -147,7 +148,7 @@ where
                 // Determine if this is a static or dynamic path
                 let has_wildcards = path_segments
                     .iter()
-                    .any(|segment| matches!(segment, PathSegment::Any(_)));
+                    .any(|segment| matches!(segment, PathSegment::Any));
 
                 // Add to the appropriate route table
                 if has_wildcards {

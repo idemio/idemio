@@ -1,6 +1,7 @@
 pub mod registry;
 pub mod config;
 
+use std::fmt::Debug;
 use crate::config::config::HandlerConfig;
 use crate::router::exchange::Exchange;
 use crate::status::{HandlerExecutionError, HandlerStatus};
@@ -15,6 +16,7 @@ pub type SharedHandler<I, O, M> = Arc<CoreHandler<I, O, M>>;
 #[async_trait]
 pub trait Handler<I, O, M>: Send
 where
+    Self: Debug,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
@@ -25,9 +27,10 @@ where
     ) -> Result<HandlerStatus, HandlerExecutionError>;
 }
 
+#[derive(Debug)]
 pub struct IdemioHandler<I, O, M, C>
 where
-    C: Send + Sync + Default + DeserializeOwned,
+    C: Send + Sync + Default + DeserializeOwned + Debug,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
@@ -38,7 +41,7 @@ where
 
 impl<I, O, M, C> IdemioHandler<I, O, M, C>
 where
-    C: Send + Sync + Default + DeserializeOwned,
+    C: Send + Sync + Default + DeserializeOwned + Debug,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
@@ -128,10 +131,10 @@ where
 #[async_trait]
 impl<I, O, M, C> Handler<I, O, M> for IdemioHandler<I, O, M, C>
 where
-    C: Send + Sync + Default + DeserializeOwned,
-    I: Send + Sync,
-    O: Send + Sync,
-    M: Send + Sync,
+    C: Send + Sync + Default + DeserializeOwned + Debug,
+    I: Send + Sync + Debug,
+    O: Send + Sync + Debug,
+    M: Send + Sync + Debug,
 {
     async fn exec(
         &self,
@@ -164,6 +167,7 @@ mod test {
         test_value: u32,
     }
 
+    #[derive(Debug)]
     // Mock handler that always succeeds
     struct SuccessHandler;
 
@@ -179,6 +183,7 @@ mod test {
         }
     }
 
+    #[derive(Debug)]
     // Mock handler that always fails
     struct FailureHandler;
 
@@ -194,6 +199,7 @@ mod test {
         }
     }
 
+    #[derive(Debug)]
     // Mock handler that fails a certain number of times then succeeds
     struct RetryableHandler {
         call_count: AtomicU32,
@@ -229,10 +235,12 @@ mod test {
         }
     }
 
+    #[derive(Debug)]
     // Mock handler that returns error status codes
     struct ErrorStatusHandler {
         status_code: Code,
     }
+
 
     impl ErrorStatusHandler {
         fn new(status_code: Code) -> Self {
@@ -250,11 +258,12 @@ mod test {
         }
     }
 
+    #[derive(Debug)]
     // Mock handler that takes time to execute
     struct SlowHandler {
         delay_ms: u64,
     }
-
+    
     impl SlowHandler {
         fn new(delay_ms: u64) -> Self {
             Self { delay_ms }

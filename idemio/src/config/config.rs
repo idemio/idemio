@@ -3,6 +3,7 @@ use serde::de::DeserializeOwned;
 use std::path::MAIN_SEPARATOR_STR;
 use serde::Serialize;
 
+#[derive(Debug)]
 pub struct HandlerConfig<C> 
 where
     C: Default + DeserializeOwned
@@ -150,6 +151,7 @@ where
 }
 
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Config<C> {
     config: C,
 }
