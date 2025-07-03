@@ -11,8 +11,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 pub struct PathConfig {
-    chains: HashMap<String, Vec<String>>,
-    paths: HashMap<String, HashMap<String, Vec<String>>>,
+    pub chains: HashMap<String, Vec<String>>,
+    pub paths: HashMap<String, HashMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -64,7 +64,7 @@ pub struct PathRouter<I, O, M> {
 }
 
 impl<I, O, M> PathRouter<I, O, M> {
-    fn new(route_config: &PathConfig, registry: &HandlerRegistry<I, O, M>) -> Self {
+    pub fn new(route_config: &PathConfig, registry: &HandlerRegistry<I, O, M>) -> Self {
         let mut table = Self {
             static_paths: DashMap::with_hasher(fnv::FnvBuildHasher::default()),
             nodes: PathNode::default(),

@@ -26,9 +26,10 @@ use idemio::router::{IdemioRouter, Router, config::RouterConfig};
 use idemio::status::{Code, HandlerExecutionError, HandlerStatus};
 use tokio::net::TcpListener;
 
-#[derive(Default, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct IdempotentLoggingHandlerConfig;
 
+#[derive(Debug)]
 struct IdempotentLoggingHandler {
     config: HandlerConfig<IdempotentLoggingHandlerConfig>,
 }
@@ -44,11 +45,12 @@ impl Handler<Bytes, Bytes, Parts> for IdempotentLoggingHandler {
     }
 }
 
-#[derive(Default, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct GreetingHandlerConfig {
     response_text: String,
 }
 
+#[derive(Debug)]
 struct GreetingHandler {
     config: HandlerConfig<GreetingHandlerConfig>,
 }
@@ -70,11 +72,12 @@ impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
     }
 }
 
-#[derive(Default, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct EchoHandlerConfig {
     reverse: bool,
 }
 
+#[derive(Debug)]
 // Handler for echo endpoint
 struct EchoHandler {
     config: HandlerConfig<EchoHandlerConfig>,
