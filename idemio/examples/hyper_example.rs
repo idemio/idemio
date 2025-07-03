@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use idemio::config::config::{
-    Config, ConfigProvider, HandlerConfig, HandlerConfigBuilder, ProgrammaticConfigProvider,
+    Config, HandlerConfig, ProgrammaticConfigProvider,
 };
 use idemio::handler::Handler;
 use idemio::handler::config::HandlerId;

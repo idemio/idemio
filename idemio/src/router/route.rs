@@ -358,18 +358,14 @@ mod test {
             "POST".to_string(),
             vec![
                 "test1".to_string(),
-                "test2".to_string(),
-                "test3".to_string(),
-                "test4".to_string(),
+                "test2".to_string()
             ],
         );
         methods.insert(
             "GET".to_string(),
             vec![
                 "test1".to_string(),
-                "test2".to_string(),
-                "test3".to_string(),
-                "test4".to_string(),
+                "test2".to_string()
             ],
         );
         paths.insert("/api/v1/users".to_string(), methods);
@@ -394,11 +390,20 @@ mod test {
 
         let result = table.lookup("/api/v1/users", "GET");
         assert!(result.is_some());
+        let handlers = result.unwrap();
+        assert_eq!(handlers.len(), 2);
 
         let result = table.lookup("/api/v1/someOtherEndpoint", "GET");
         assert!(result.is_some());
+        let handlers = result.unwrap();
+        assert_eq!(handlers.len(), 4);
 
         let result = table.lookup("/invalid", "GET");
         assert!(result.is_none());
+        
+        let result = table.lookup("/api/v1/users/somethingElse", "GET");
+        assert!(result.is_some());
+        let handlers = result.unwrap();
+        assert_eq!(handlers.len(), 4);
     }
 }

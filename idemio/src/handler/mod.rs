@@ -10,8 +10,7 @@ use serde::de::DeserializeOwned;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-type CoreHandler<I, O, M> = dyn Handler<I, O, M> + Send + Sync;
-pub type SharedHandler<I, O, M> = Arc<CoreHandler<I, O, M>>;
+pub type SharedHandler<I, O, M> = Arc<dyn Handler<I, O, M> + Send + Sync>;
 
 #[async_trait]
 pub trait Handler<I, O, M>: Send
