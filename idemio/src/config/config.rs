@@ -1,7 +1,9 @@
 use std::fs::File;
 use serde::de::DeserializeOwned;
 use std::path::MAIN_SEPARATOR_STR;
+use serde::Serialize;
 
+#[derive(Debug)]
 pub struct HandlerConfig<C> 
 where
     C: Default + DeserializeOwned
@@ -138,7 +140,7 @@ where
         self
     }
     
-    pub fn config(&mut self, config: Config<C>) -> &mut Self {
+    pub fn inner_config(&mut self, config: Config<C>) -> &mut Self {
         self.config.config = config;
         self
     }
@@ -149,6 +151,7 @@ where
 }
 
 #[derive(Default)]
+#[derive(Debug)]
 pub struct Config<C> {
     config: C,
 }
@@ -209,6 +212,20 @@ where
             Ok(config) => Ok(config),
             Err(_) => Err(())
         }
+    }
+}
+
+pub struct ProgrammaticConfigProvider<C> {
+    pub config: C
+}
+
+impl<C> ConfigProvider<C> for ProgrammaticConfigProvider<C> 
+where
+    C: Default + DeserializeOwned + Clone + Serialize
+{
+    fn load(&self) -> Result<C, ()> {
+        let config = self.config.clone();
+        Ok(config)
     }
 }
 

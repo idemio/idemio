@@ -82,7 +82,7 @@ fn find_config_inner_type(field: Field) -> Option<Type> {
 
     if let Type::Path(TypePath { path, .. }) = &field.ty {
         // Get the last segment of the field.
-        // i.e. idem-handler-config::config::Config<X>, or Config<X>
+        // i.e. idemio-config::config::Config<X>, or Config<X>
         if let Some(segment) = path.segments.last() {
             // Make sure the outer type is 'Config' and grab the inner type argument
             if segment.ident == "Config" {
