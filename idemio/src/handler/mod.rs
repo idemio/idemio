@@ -15,7 +15,6 @@ pub type SharedHandler<I, O, M> = Arc<dyn Handler<I, O, M> + Send + Sync>;
 #[async_trait]
 pub trait Handler<I, O, M>: Send
 where
-    Self: Debug,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
@@ -26,10 +25,9 @@ where
     ) -> Result<HandlerStatus, HandlerExecutionError>;
 }
 
-#[derive(Debug)]
 pub struct IdemioHandler<I, O, M, C>
 where
-    C: Send + Sync + Default + DeserializeOwned + Debug,
+    C: Send + Sync + Default + DeserializeOwned,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
@@ -40,7 +38,7 @@ where
 
 impl<I, O, M, C> IdemioHandler<I, O, M, C>
 where
-    C: Send + Sync + Default + DeserializeOwned + Debug,
+    C: Send + Sync + Default + DeserializeOwned,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
@@ -130,10 +128,10 @@ where
 #[async_trait]
 impl<I, O, M, C> Handler<I, O, M> for IdemioHandler<I, O, M, C>
 where
-    C: Send + Sync + Default + DeserializeOwned + Debug,
-    I: Send + Sync + Debug,
-    O: Send + Sync + Debug,
-    M: Send + Sync + Debug,
+    C: Send + Sync + Default + DeserializeOwned,
+    I: Send + Sync,
+    O: Send + Sync,
+    M: Send + Sync,
 {
     async fn exec(
         &self,
@@ -176,7 +174,7 @@ mod test {
             &self,
             exchange: &mut Exchange<String, String, ()>,
         ) -> Result<HandlerStatus, HandlerExecutionError> {
-            let input = exchange.take_request().unwrap();
+            let input = exchange.take_input().unwrap();
             exchange.save_output(format!("processed: {}", input));
             Ok(HandlerStatus::new(Code::OK))
         }
@@ -227,7 +225,7 @@ mod test {
                     message: format!("Failure #{}", current_call + 1).into(),
                 })
             } else {
-                let input = exchange.take_request().unwrap();
+                let input = exchange.take_input().unwrap();
                 exchange.save_output(format!("retry success: {}", input));
                 Ok(HandlerStatus::new(Code::OK))
             }
@@ -276,7 +274,7 @@ mod test {
             exchange: &mut Exchange<String, String, ()>,
         ) -> Result<HandlerStatus, HandlerExecutionError> {
             tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
-            let input = exchange.take_request().unwrap();
+            let input = exchange.take_input().unwrap();
             exchange.save_output(format!("slow processed: {}", input));
             Ok(HandlerStatus::new(Code::OK))
         }

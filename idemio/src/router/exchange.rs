@@ -1,9 +1,12 @@
+use fnv::FnvHasher;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
+use uuid::Uuid;
 
 pub struct Exchange<I, O, M> {
-    uuid: String,
+    uuid: Uuid,
     metadata: Option<M>,
     input: Option<I>,
     output: Option<O>,
@@ -19,7 +22,7 @@ where
     M: Send + Sync,
 {
     pub fn new() -> Self {
-        let uuid = uuid::Uuid::new_v4().to_string();
+        let uuid = Uuid::new_v4();
         Self {
             uuid,
             metadata: None,
@@ -30,8 +33,8 @@ where
             attachments: Attachments::new(),
         }
     }
-    
-    pub fn uuid(&self) -> &str {
+
+    pub fn uuid(&self) -> &Uuid {
         &self.uuid
     }
 
@@ -68,8 +71,9 @@ where
             }
             Ok(())
         } else {
-            Err(ExchangeError::OutputCallbackError(
-                "No input available".to_string(),
+            Err(ExchangeError::input_callback_error(
+                &self.uuid,
+                "Exchange does not contain an input to perform callbacks on",
             ))
         }
     }
@@ -81,8 +85,9 @@ where
             }
             Ok(())
         } else {
-            Err(ExchangeError::OutputReadError(
-                "No output available".to_string(),
+            Err(ExchangeError::output_callback_error(
+                &self.uuid,
+                "Exchange does not contain an output to perform callbacks on",
             ))
         }
     }
@@ -94,26 +99,32 @@ where
     pub fn input(&self) -> Result<&I, ExchangeError> {
         match &self.input {
             Some(out) => Ok(out),
-            None => Err(ExchangeError::InputReadError("No input available".to_string())),
+            None => Err(ExchangeError::input_read_error(
+                &self.uuid,
+                "Exchange does not contain any input data to read.",
+            )),
         }
     }
 
     pub fn input_mut(&mut self) -> Result<&mut I, ExchangeError> {
         match &mut self.input {
             Some(out) => Ok(out),
-            None => Err(ExchangeError::InputReadError("No input available".to_string())),
+            None => Err(ExchangeError::input_read_error(
+                &self.uuid,
+                "Exchange does not contain any input data to modify.",
+            )),
         }
     }
 
-    pub fn take_request(&mut self) -> Result<I, ExchangeError> {
-        if let Ok(_) = self.execute_input_callbacks() {
-            self.input
-                .take()
-                .ok_or_else(|| ExchangeError::InputReadError("No input available".to_string()))
-        } else {
-            Err(ExchangeError::InputCallbackError(
-                "Input callback failed".to_string(),
-            ))
+    pub fn take_input(&mut self) -> Result<I, ExchangeError> {
+        match self.execute_input_callbacks() {
+            Ok(_) => self.input.take().ok_or_else(|| {
+                ExchangeError::input_take_error(
+                    &self.uuid,
+                    "Exchange does not contain any input data to consume.",
+                )
+            }),
+            Err(e) => Err(e),
         }
     }
 
@@ -124,8 +135,9 @@ where
     pub fn output(&self) -> Result<&O, ExchangeError> {
         match &self.output {
             Some(out) => Ok(out),
-            None => Err(ExchangeError::OutputReadError(
-                "No output available".to_string(),
+            None => Err(ExchangeError::output_read_error(
+                &self.uuid,
+                "Exchange contains no output data to read.",
             )),
         }
     }
@@ -133,62 +145,63 @@ where
     pub fn output_mut(&mut self) -> Result<&mut O, ExchangeError> {
         match &mut self.output {
             Some(out) => Ok(out),
-            None => Err(ExchangeError::OutputReadError(
-                "No output available".to_string(),
+            None => Err(ExchangeError::output_read_error(
+                &self.uuid,
+                "Exchange does not contain any output data to modify.",
             )),
         }
     }
 
     pub fn take_output(&mut self) -> Result<O, ExchangeError> {
-        if let Ok(_) = self.execute_output_callbacks() {
-            self.output
-                .take()
-                .ok_or_else(|| ExchangeError::OutputReadError("Output not available".to_string()))
-        } else {
-            Err(ExchangeError::OutputCallbackError(
-                "Output callback failed".to_string(),
-            ))
+        match self.execute_output_callbacks() {
+            Ok(_) => self.output.take().ok_or_else(|| {
+                ExchangeError::output_read_error(
+                    self.uuid(),
+                    "Exchange does not contain any output data to consume.",
+                )
+            }),
+            Err(e) => Err(e),
         }
     }
 }
 
 pub struct Attachments {
-    attachments: HashMap<(AttachmentKey, TypeId), Box<dyn Any + Send + Sync>>,
+    attachments: HashMap<AttachmentKey, Box<dyn Any + Send + Sync>, fnv::FnvBuildHasher>,
 }
 
 impl Attachments {
     pub fn new() -> Self {
         Self {
-            attachments: HashMap::new(),
+            attachments: HashMap::with_hasher(fnv::FnvBuildHasher::default()),
         }
     }
 
-    pub fn add_attachment<K>(&mut self, key: AttachmentKey, value: K)
+    pub fn add<K>(&mut self, key: impl AsRef<str>, value: K)
     where
         K: Send + Sync + 'static,
     {
         let type_id = TypeId::of::<K>();
-        self.attachments.insert((key, type_id), Box::new(value));
+        self.attachments.insert(AttachmentKey::new(key, type_id), Box::new(value));
     }
 
-    pub fn attachment<K>(&self, key: AttachmentKey) -> Option<&K>
+    pub fn get<K>(&self, key: impl AsRef<str>) -> Option<&K>
     where
         K: Send + 'static,
     {
         let type_id = TypeId::of::<K>();
-        if let Some(option_any) = self.attachments.get(&(key, type_id)) {
+        if let Some(option_any) = self.attachments.get(&AttachmentKey::new(key, type_id)) {
             option_any.downcast_ref::<K>()
         } else {
             None
         }
     }
 
-    pub fn attachment_mut<K>(&mut self, key: AttachmentKey) -> Option<&mut K>
+    pub fn get_mut<K>(&mut self, key: impl AsRef<str>) -> Option<&mut K>
     where
         K: Send + 'static,
     {
         let type_id = TypeId::of::<K>();
-        if let Some(option_any) = self.attachments.get_mut(&(key, type_id)) {
+        if let Some(option_any) = self.attachments.get_mut(&AttachmentKey::new(key, type_id)) {
             option_any.downcast_mut::<K>()
         } else {
             None
@@ -198,32 +211,90 @@ impl Attachments {
 
 #[derive(Debug)]
 pub enum ExchangeError {
-    InputReadError(String),
-    InputTakeError(String),
-    OutputReadError(String),
-    OutputTakeError(String),
-    InputCallbackError(String),
-    OutputCallbackError(String),
+    InputReadError(Uuid, String),
+    InputTakeError(Uuid, String),
+    OutputReadError(Uuid, String),
+    OutputTakeError(Uuid, String),
+    InputCallbackError(Uuid, String),
+    OutputCallbackError(Uuid, String),
+}
+
+impl ExchangeError {
+    pub fn input_read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::InputReadError(*uuid, msg.into())
+    }
+
+    pub fn input_take_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::InputTakeError(*uuid, msg.into())
+    }
+
+    pub fn output_read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::OutputReadError(*uuid, msg.into())
+    }
+
+    pub fn output_take_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::OutputTakeError(*uuid, msg.into())
+    }
+
+    pub fn input_callback_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::InputCallbackError(*uuid, msg.into())
+    }
+
+    pub fn output_callback_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::OutputCallbackError(*uuid, msg.into())
+    }
 }
 
 impl Display for ExchangeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let (error_type, error_msg) = match self {
-            ExchangeError::InputReadError(msg) => ("InputReadError", msg),
-            ExchangeError::InputTakeError(msg) => ("InputTakeError", msg),
-            ExchangeError::OutputReadError(msg) => ("OutputReadError", msg),
-            ExchangeError::OutputTakeError(msg) => ("OutputTakeError", msg),
-            ExchangeError::InputCallbackError(msg) => ("InputCallbackError", msg),
-            ExchangeError::OutputCallbackError(msg) => ("OutputCallbackError", msg),
-        };
-        write!(f, "{}: {}", error_type, error_msg)
+        match self {
+            ExchangeError::InputReadError(uuid, msg) => {
+                write!(f, "{} Failed to read input: {}", uuid, msg)
+            }
+            ExchangeError::InputTakeError(uuid, msg) => {
+                write!(f, "{} Failed to consume input: {}", uuid, msg)
+            }
+            ExchangeError::OutputReadError(uuid, msg) => {
+                write!(f, "{} Failed to read output: {}", uuid, msg)
+            }
+            ExchangeError::OutputTakeError(uuid, msg) => {
+                write!(f, "{} Failed to consume output: {}", uuid, msg)
+            }
+            ExchangeError::InputCallbackError(uuid, msg) => {
+                write!(f, "{} Failed to invoke input callback: {}", uuid, msg)
+            }
+            ExchangeError::OutputCallbackError(uuid, msg) => {
+                write!(f, "{} Failed to invoke output callback: {}", uuid, msg)
+            }
+        }
     }
 }
 
 impl std::error::Error for ExchangeError {}
 
 #[derive(PartialOrd, PartialEq, Hash, Eq)]
-pub struct AttachmentKey(pub String);
+pub struct AttachmentKey {
+    key_hash: u64,
+    type_hash: u64,
+}
+
+impl AttachmentKey {
+    pub fn new(key: impl AsRef<str>, type_id: TypeId) -> Self {
+        let key = key.as_ref();
+        let mut key_hasher = FnvHasher::default();
+        key.hash(&mut key_hasher);
+        let key_hash = key_hasher.finish();
+        
+        let mut type_hasher = FnvHasher::default();
+        type_id.hash(&mut type_hasher);
+        let type_hash = type_hasher.finish();
+        
+        Self {
+            key_hash,
+            type_hash,
+        }
+    }
+}
 
 pub struct Callback<T> {
     callback: Box<dyn FnMut(&mut T, &mut Attachments) + Send>,
@@ -241,5 +312,71 @@ where
 
     pub fn invoke(&mut self, write: &mut T, attachments: &mut Attachments) {
         (self.callback)(write, attachments);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::router::exchange::Exchange;
+
+    struct TestStruct;
+    
+    #[test]
+    fn test_attachments() {
+
+        let mut exchange: Exchange<(), (), ()> = Exchange::new();
+        let key1 = "test_key1";
+        let key2 = "test_key2";
+        let key3 = "test_key3";
+        let key4 = "test_key4";
+        {
+            exchange.attachments_mut().add::<u64>(key1, 1);
+            exchange.attachments_mut().add::<String>(key2, String::from("test"));
+            exchange.attachments_mut().add::<bool>(key3, true);
+            let test_struct = TestStruct;
+            exchange.attachments_mut().add::<TestStruct>(key4, test_struct);    
+        }
+
+        {
+            assert!(exchange.attachments().get::<u64>(key1).is_some());
+            assert!(exchange.attachments().get::<String>(key2).is_some());
+            assert!(exchange.attachments().get::<bool>(key3).is_some());
+            assert!(exchange.attachments().get::<TestStruct>(key4).is_some());
+        }
+    }
+    
+    #[test]
+    fn test_callbacks() {
+        let mut exchange: Exchange<String, (), ()> = Exchange::new();
+        exchange.save_input(String::from("hello"));
+        exchange.add_input_listener(|input, _| {
+            input.push_str(" world!");
+        });
+        exchange.add_input_listener(|input, _| {
+            input.push_str(" world!");
+        });
+        exchange.add_input_listener(|input, _| {
+            input.push_str(" world!");
+        });
+        let request = exchange.take_input().unwrap();
+        assert_eq!(request, "hello world! world! world!");
+    }
+    
+    #[test]
+    fn test_consume() {
+        let mut exchange: Exchange<String, (), ()> = Exchange::new();
+        
+        // consume before adding data
+        let invalid_consume = exchange.take_input();
+        assert!(invalid_consume.is_err());
+        
+        // consume after adding data
+        exchange.save_input(String::from("hello"));
+        let request = exchange.take_input().unwrap();
+        assert_eq!(request, "hello");
+        
+        // consume again
+        let invalid_consume = exchange.take_input();
+        assert!(invalid_consume.is_err());
     }
 }

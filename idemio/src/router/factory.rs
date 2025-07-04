@@ -2,7 +2,6 @@ use crate::router::exchange::Exchange;
 use crate::router::{RouteInfo, RouterError};
 use async_trait::async_trait;
 
-/// Trait for creating exchanges from incoming requests
 #[async_trait]
 pub trait ExchangeFactory<R, I, O, M>: Send + Sync
 where
@@ -11,10 +10,8 @@ where
     O: Send + Sync,
     M: Send + Sync,
 {
-    /// Extract routing information from the request
     async fn extract_route_info(&self, request: &R) -> Result<RouteInfo, RouterError>;
-
-    /// Create an exchange from the request
+    
     async fn create_exchange(&self, request: R) -> Result<Exchange<I, O, M>, RouterError>;
 }
 
@@ -25,11 +22,11 @@ pub mod hyper {
     use hyper::Request;
 
     use crate::router::RouterError;
-    use crate::router::config::RouteInfo;
     use crate::router::exchange::Exchange;
     use crate::router::factory::ExchangeFactory;
     use hyper::body::{Bytes, Incoming};
     use hyper::http::request::Parts;
+    use crate::router::route::RouteInfo;
 
     pub struct HyperExchangeFactory;
 

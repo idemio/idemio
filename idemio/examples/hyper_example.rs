@@ -61,7 +61,7 @@ impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
         &self,
         exchange: &mut Exchange<Bytes, Bytes, Parts>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
-        let input = exchange.take_request().map_err(|e| HandlerExecutionError {
+        let input = exchange.take_input().map_err(|e| HandlerExecutionError {
             message: format!("Failed to get input: {}", e).into(),
         })?;
         let input_str = String::from_utf8_lossy(&input).to_string();
@@ -89,7 +89,7 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
         &self,
         exchange: &mut Exchange<Bytes, Bytes, Parts>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
-        let input = exchange.take_request().map_err(|e| HandlerExecutionError {
+        let input = exchange.take_input().map_err(|e| HandlerExecutionError {
             message: format!("Failed to get input: {}", e).into(),
         })?;
         let input_str = String::from_utf8_lossy(&input).to_string();
