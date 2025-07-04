@@ -1,4 +1,4 @@
-# Idem Handler
+# Idemio
 The core library crates used in most `idemio` repositories.
 
 ## Features
