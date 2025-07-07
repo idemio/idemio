@@ -156,7 +156,7 @@ where
         match self.execute_output_callbacks() {
             Ok(_) => self.output.take().ok_or_else(|| {
                 ExchangeError::output_read_error(
-                    self.uuid(),
+                    &self.uuid,
                     "Exchange does not contain any output data to consume.",
                 )
             }),
@@ -181,7 +181,8 @@ impl Attachments {
         K: Send + Sync + 'static,
     {
         let type_id = TypeId::of::<K>();
-        self.attachments.insert(AttachmentKey::new(key, type_id), Box::new(value));
+        self.attachments
+            .insert(AttachmentKey::new(key, type_id), Box::new(value));
     }
 
     pub fn get<K>(&self, key: impl AsRef<str>) -> Option<&K>
@@ -284,11 +285,11 @@ impl AttachmentKey {
         let mut key_hasher = FnvHasher::default();
         key.hash(&mut key_hasher);
         let key_hash = key_hasher.finish();
-        
+
         let mut type_hasher = FnvHasher::default();
         type_id.hash(&mut type_hasher);
         let type_hash = type_hasher.finish();
-        
+
         Self {
             key_hash,
             type_hash,
@@ -320,10 +321,9 @@ mod test {
     use crate::router::exchange::Exchange;
 
     struct TestStruct;
-    
+
     #[test]
     fn test_attachments() {
-
         let mut exchange: Exchange<(), (), ()> = Exchange::new();
         let key1 = "test_key1";
         let key2 = "test_key2";
@@ -331,10 +331,14 @@ mod test {
         let key4 = "test_key4";
         {
             exchange.attachments_mut().add::<u64>(key1, 1);
-            exchange.attachments_mut().add::<String>(key2, String::from("test"));
+            exchange
+                .attachments_mut()
+                .add::<String>(key2, String::from("test"));
             exchange.attachments_mut().add::<bool>(key3, true);
             let test_struct = TestStruct;
-            exchange.attachments_mut().add::<TestStruct>(key4, test_struct);    
+            exchange
+                .attachments_mut()
+                .add::<TestStruct>(key4, test_struct);
         }
 
         {
@@ -344,7 +348,7 @@ mod test {
             assert!(exchange.attachments().get::<TestStruct>(key4).is_some());
         }
     }
-    
+
     #[test]
     fn test_callbacks() {
         let mut exchange: Exchange<String, (), ()> = Exchange::new();
@@ -361,20 +365,20 @@ mod test {
         let request = exchange.take_input().unwrap();
         assert_eq!(request, "hello world! world! world!");
     }
-    
+
     #[test]
     fn test_consume() {
         let mut exchange: Exchange<String, (), ()> = Exchange::new();
-        
+
         // consume before adding data
         let invalid_consume = exchange.take_input();
         assert!(invalid_consume.is_err());
-        
+
         // consume after adding data
         exchange.save_input(String::from("hello"));
         let request = exchange.take_input().unwrap();
         assert_eq!(request, "hello");
-        
+
         // consume again
         let invalid_consume = exchange.take_input();
         assert!(invalid_consume.is_err());

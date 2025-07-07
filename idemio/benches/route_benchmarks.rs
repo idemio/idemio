@@ -4,7 +4,7 @@ use idemio::handler::Handler;
 use idemio::handler::registry::HandlerRegistry;
 use idemio::router::exchange::Exchange;
 use idemio::router::route::{PathConfig, PathRouter, RouteInfo};
-use idemio::status::{Code, HandlerExecutionError, HandlerStatus};
+use idemio::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -20,7 +20,11 @@ impl Handler<(), (), ()> for DummyHandler {
         &self,
         _exchange: &mut Exchange<(), (), ()>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
-        Ok(HandlerStatus::new(Code::OK))
+        Ok(HandlerStatus::new(ExchangeState::OK))
+    }
+
+    fn name(&self) -> &str {
+        "dummy"
     }
 }
 

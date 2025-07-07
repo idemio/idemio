@@ -3,8 +3,9 @@ use crate::router::{RouteInfo, RouterError};
 use async_trait::async_trait;
 
 #[async_trait]
-pub trait ExchangeFactory<R, I, O, M>: Send + Sync
+pub trait ExchangeFactory<R, I, O, M>
 where
+    Self: Send + Sync,
     R: Send + Sync,
     I: Send + Sync,
     O: Send + Sync,

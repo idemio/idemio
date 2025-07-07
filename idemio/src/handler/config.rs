@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -26,6 +27,12 @@ impl Display for ChainId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HandlerId {
     handler_hash: u64,
+}
+
+impl<'a> From<&'a HandlerId> for Cow<'a, HandlerId> {
+    fn from(value: &'a HandlerId) -> Self {
+        Cow::Borrowed(value)
+    }
 }
 
 impl HandlerId {

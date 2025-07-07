@@ -23,7 +23,7 @@ use idemio::router::config::{ChainId, PathConfig};
 use idemio::router::exchange::Exchange;
 use idemio::router::factory::hyper::HyperExchangeFactory;
 use idemio::router::{IdemioRouter, Router, config::RouterConfig};
-use idemio::status::{Code, HandlerExecutionError, HandlerStatus};
+use idemio::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
 use tokio::net::TcpListener;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -41,7 +41,7 @@ impl Handler<Bytes, Bytes, Parts> for IdempotentLoggingHandler {
         exchange: &mut Exchange<Bytes, Bytes, Parts>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
         println!("Print something here");
-        Ok(HandlerStatus::new(Code::OK))
+        Ok(HandlerStatus::new(ExchangeState::OK))
     }
 }
 
@@ -68,7 +68,7 @@ impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
         let response = format!("Hello, {}!", input_str);
         let response_bytes = Bytes::from(response.into_bytes());
         exchange.save_output(response_bytes);
-        Ok(HandlerStatus::new(Code::OK | Code::REQUEST_COMPLETED))
+        Ok(HandlerStatus::new(ExchangeState::OK | ExchangeState::REQUEST_COMPLETED))
     }
 }
 
@@ -96,7 +96,7 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
         let response = format!("Echo: {}", input_str);
         let response_bytes = Bytes::from(response.into_bytes());
         exchange.save_output(response_bytes);
-        Ok(HandlerStatus::new(Code::OK | Code::REQUEST_COMPLETED))
+        Ok(HandlerStatus::new(ExchangeState::OK | ExchangeState::REQUEST_COMPLETED))
     }
 }
 
