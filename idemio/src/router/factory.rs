@@ -1,5 +1,5 @@
+use crate::router::RouterError;
 use crate::router::exchange::Exchange;
-use crate::router::{RouteInfo, RouterError};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -11,8 +11,11 @@ where
     O: Send + Sync,
     M: Send + Sync,
 {
-    async fn extract_route_info(&self, request: &R) -> Result<RouteInfo, RouterError>;
-    
+    async fn extract_route_info<'a>(
+        &self,
+        request: &'a R,
+    ) -> Result<(&'a str, &'a str), RouterError>;
+
     async fn create_exchange(&self, request: R) -> Result<Exchange<I, O, M>, RouterError>;
 }
 
@@ -27,19 +30,18 @@ pub mod hyper {
     use crate::router::factory::ExchangeFactory;
     use hyper::body::{Bytes, Incoming};
     use hyper::http::request::Parts;
-    use crate::router::route::RouteInfo;
 
     pub struct HyperExchangeFactory;
 
     #[async_trait]
     impl ExchangeFactory<Request<Incoming>, Bytes, Bytes, Parts> for HyperExchangeFactory {
-        async fn extract_route_info(
+        async fn extract_route_info<'a>(
             &self,
-            request: &Request<Incoming>,
-        ) -> Result<RouteInfo, RouterError> {
+            request: &'a Request<Incoming>,
+        ) -> Result<(&'a str, &'a str), RouterError> {
             let method = request.method().as_str();
             let path = request.uri().path();
-            Ok(RouteInfo::new(path, method))
+            Ok((path, method))
         }
 
         async fn create_exchange(

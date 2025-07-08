@@ -6,7 +6,7 @@ use crate::handler::config::{ChainId, HandlerId};
 use crate::handler::registry::HandlerRegistry;
 use crate::router::exchange::Exchange;
 use crate::router::factory::ExchangeFactory;
-use crate::router::route::{LoadedChain, PathConfig, PathRouter, RouteInfo};
+use crate::router::route::{LoadedChain, PathConfig, PathRouter};
 use crate::status::{ExchangeState, HandlerExecutionError};
 use async_trait::async_trait;
 use std::fmt::Display;
@@ -141,9 +141,10 @@ where
 
     fn get_handlers_from_route_info(
         &self,
-        route_info: RouteInfo,
+        request_path: &str,
+        request_method: &str,
     ) -> Option<Arc<LoadedChain<I, O, M>>> {
-        self.route_table.lookup(route_info)
+        self.route_table.lookup(request_path, request_method)
     }
 
     async fn execute_handlers(
@@ -211,15 +212,14 @@ where
     F: ExchangeFactory<R, I, O, M>,
 {
     async fn route(&self, request: R) -> Result<O, RouterError> {
-        let route_info = self.exchange_factory.extract_route_info(&request).await?;
-
+        let (path, method) = self.exchange_factory.extract_route_info(&request).await?;
         log::trace!(
             "Extracted route info from request: {}@{}",
-            &route_info.path,
-            &route_info.method
+            &path,
+            &method
         );
         let executables = self
-            .get_handlers_from_route_info(route_info)
+            .get_handlers_from_route_info(path, method)
             .ok_or(RouterError::RouteNotFound)?;
         let mut exchange = self.exchange_factory.create_exchange(request).await?;
         log::debug!("Created new exchange {}", exchange.uuid());
@@ -243,12 +243,12 @@ mod tests {
 
         #[async_trait]
         impl ExchangeFactory<String, String, String, ()> for CustomExchangeFactory {
-            async fn extract_route_info(&self, request: &String) -> Result<RouteInfo, RouterError> {
+            async fn extract_route_info<'a>(&self, request: &'a String) -> Result<(&'a str, &'a str), RouterError> {
                 let mut parts = request.split(':');
                 if let (Some(method), Some(path), Some(_)) =
                     (parts.next(), parts.next(), parts.next())
                 {
-                    Ok(RouteInfo::new(path, method))
+                    Ok((path, method))
                 } else {
                     Err(RouterError::ExchangeCreationFailed(
                         "Invalid format".to_string(),
@@ -272,9 +272,9 @@ mod tests {
         let factory = CustomExchangeFactory;
         let custom_request = "GET:/test:body_content".to_string();
 
-        let route_info = factory.extract_route_info(&custom_request).await.unwrap();
-        assert_eq!(route_info.method, "GET");
-        assert_eq!(route_info.path, "/test");
+        let (path, method) = factory.extract_route_info(&custom_request).await.unwrap();
+        assert_eq!(method, "GET");
+        assert_eq!(path, "/test");
 
         let exchange = factory.create_exchange(custom_request).await.unwrap();
         assert_eq!(exchange.input().unwrap(), "body_content");

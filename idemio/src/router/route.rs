@@ -17,21 +17,6 @@ pub enum PathRouterError {
     UnknownHandler(String),
 }
 
-#[derive(Debug, Clone)]
-pub struct RouteInfo {
-    pub path: String,
-    pub method: String,
-}
-
-impl RouteInfo {
-    pub fn new(path: impl Into<String>, method: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            method: method.into(),
-        }
-    }
-}
-
 impl PathRouterError {
     pub fn invalid_path(path: impl Into<String>) -> Self {
         Self::InvalidPath(path.into())
@@ -224,10 +209,7 @@ impl<I, O, M> PathRouter<I, O, M> {
                 for (method, path_chain) in methods {
                     let key = PathKey::new(method, path);
                     let loaded_chain = Self::load_handlers(handler_registry, path_chain)?;
-                    self.static_paths.insert(
-                        key,
-                        Arc::new(loaded_chain),
-                    );
+                    self.static_paths.insert(key, Arc::new(loaded_chain));
                 }
             }
 
@@ -266,66 +248,42 @@ impl<I, O, M> PathRouter<I, O, M> {
         path.split('/').filter(|s| !s.is_empty())
     }
 
-    pub fn lookup(&self, route_info: RouteInfo) -> Option<Arc<LoadedChain<I, O, M>>> {
-        log::trace!("Looking up route for path: {}", route_info.path);
+    pub fn lookup(&self, request_path: &str, request_method: &str) -> Option<Arc<LoadedChain<I, O, M>>> {
 
-        let req_method = route_info.method;
-        let req_path = route_info.path;
-
-        if let Some(handlers) = self.static_paths.get(&PathKey::new(&req_method, &req_path)) {
+        if let Some(handlers) = self.static_paths.get(&PathKey::new(request_method, request_path)) {
             return Some(handlers.clone());
         }
 
-        let req_path_segments = Self::split_path(&req_path);
-        let mut matching_paths: Vec<&PathNode<I, O, M>> = vec![];
+        let req_path_segments = Self::split_path(request_path);
+        let mut best_match: Option<&PathNode<I, O, M>> = None;
+        let mut max_depth = 0;
         let mut current_node = &self.nodes;
-        let mut full_match = false;
-        for req_path_segment in req_path_segments {
-            let path_segment = PathSegment::from_str(req_path_segment).unwrap();
 
-            // Incoming requests cannot contain wildcards.
-            if path_segment == PathSegment::Any {
-                return None;
-            }
-
-            if let Some(wild_card_path) = current_node.children.get(&PathSegment::Any) {
-                if wild_card_path.methods.contains_key(&req_method) {
-                    matching_paths.push(wild_card_path);
+        for segment_str in req_path_segments {
+            if let Some(wildcard_node) = current_node.children.get(&PathSegment::Any) {
+                if wildcard_node.methods.contains_key(request_method) {
+                    if wildcard_node.segment_depth > max_depth {
+                        max_depth = wildcard_node.segment_depth;
+                        best_match = Some(wildcard_node);
+                    }
                 }
             }
 
-            // As soon as the path no longer matches, we can stop.
-            current_node = match current_node.children.get(&path_segment) {
-                None => {
-                    full_match = false;
-                    break;
-                }
-                Some(child) => {
-                    full_match = true;
-                    child
-                }
+            // Try exact match
+            let static_segment = PathSegment::Static(segment_str.to_string());
+            current_node = match current_node.children.get(&static_segment) {
+                Some(child) => child,
+                None => break,
             };
         }
 
-        if full_match && current_node.methods.contains_key(&req_method) {
-            matching_paths.push(current_node);
+        // Check final node for exact match
+        if current_node.methods.contains_key(request_method) && current_node.segment_depth > max_depth
+        {
+            best_match = Some(current_node);
         }
 
-        if matching_paths.is_empty() {
-            return None;
-        }
-
-        let mut max_depth = 0;
-        let mut best_match: Option<&PathNode<I, O, M>> = None;
-
-        for path in matching_paths {
-            if path.segment_depth > max_depth {
-                max_depth = path.segment_depth;
-                best_match = Some(path);
-            }
-        }
-
-        best_match.and_then(|path_node| path_node.methods.get(&req_method).cloned())
+        best_match.and_then(|node| node.methods.get(request_method).cloned())
     }
 }
 
@@ -335,7 +293,7 @@ mod test {
     use crate::handler::config::HandlerId;
     use crate::handler::registry::HandlerRegistry;
     use crate::router::exchange::Exchange;
-    use crate::router::route::{PathChain, PathConfig, PathRouter, RouteInfo};
+    use crate::router::route::{PathChain, PathConfig, PathRouter};
     use crate::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
     use async_trait::async_trait;
     use std::collections::HashMap;
@@ -380,20 +338,11 @@ mod test {
             termination_handler: "test3".to_string(),
             response_handlers: vec!["test4".to_string()],
         };
-        methods.insert(
-            "POST".to_string(),
-            path_chain.clone(),
-        );
-        methods.insert(
-            "GET".to_string(),
-            path_chain.clone()
-        );
+        methods.insert("POST".to_string(), path_chain.clone());
+        methods.insert("GET".to_string(), path_chain.clone());
         paths.insert("/api/v1/users".to_string(), methods);
         let mut methods = HashMap::new();
-        methods.insert(
-            "GET".to_string(),
-            path_chain.clone(),
-        );
+        methods.insert("GET".to_string(), path_chain.clone());
         paths.insert("/api/v1/*".to_string(), methods);
 
         let config = PathConfig {
@@ -402,41 +351,25 @@ mod test {
         };
 
         let table = PathRouter::new(&config, &registry).unwrap();
-
-        let route_info = RouteInfo {
-            path: "/api/v1/users".to_string(),
-            method: "GET".to_string(),
-        };
-        let result = table.lookup(route_info);
+        
+        let result = table.lookup("/api/v1/users", "GET");
         assert!(result.is_some());
 
         let handlers = result.unwrap();
         assert_eq!(handlers.request_handlers.len(), 2);
-
-        let route_info = RouteInfo {
-            path: "/api/v1/someOtherEndpoint".to_string(),
-            method: "GET".to_string(),
-        };
-        let result = table.lookup(route_info);
+        
+        let result = table.lookup("/api/v1/someOtherEndpoint", "GET");
         assert!(result.is_some());
 
         let handlers = result.unwrap();
-        assert_eq!(handlers.request_handlers.len(), 4);
-
-        let route_info = RouteInfo {
-            path: "/invalid".to_string(),
-            method: "GET".to_string(),
-        };
-        let result = table.lookup(route_info);
+        assert_eq!(handlers.request_handlers.len(), 2);
+        
+        let result = table.lookup("/invalid", "GET");
         assert!(result.is_none());
-
-        let route_info = RouteInfo {
-            path: "/api/v1/users/somethingElse".to_string(),
-            method: "GET".to_string(),
-        };
-        let result = table.lookup(route_info);
+        
+        let result = table.lookup("/api/v1/users/somethingElse", "GET");
         assert!(result.is_some());
         let handlers = result.unwrap();
-        assert_eq!(handlers.request_handlers.len(), 4);
+        assert_eq!(handlers.request_handlers.len(), 2);
     }
 }
