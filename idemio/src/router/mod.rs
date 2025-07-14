@@ -1,10 +1,10 @@
-pub mod exchange;
 pub mod factory;
 pub mod route;
+mod executor;
 
+use crate::exchange::RootExchange;
 use crate::handler::config::{ChainId, HandlerId};
 use crate::handler::registry::HandlerRegistry;
-use crate::router::exchange::Exchange;
 use crate::router::factory::ExchangeFactory;
 use crate::router::route::{LoadedChain, PathConfig, PathRouter};
 use crate::status::{ExchangeState, HandlerExecutionError};
@@ -13,6 +13,7 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use crate::router::executor::HandlerExecutor;
 
 #[derive(Debug)]
 pub enum RouterError {
@@ -27,15 +28,18 @@ pub enum RouterError {
 }
 
 impl RouterError {
-    
     pub fn exchange_status_error(status: ExchangeState, code: i32) -> Self {
         RouterError::ExchangeStatusError(status, code)
     }
-    
-    pub fn exchange_timeout_error(start: SystemTime, end: SystemTime, id: impl Into<String>) -> Self {
+
+    pub fn exchange_timeout_error(
+        start: SystemTime,
+        end: SystemTime,
+        id: impl Into<String>,
+    ) -> Self {
         RouterError::ExchangeTimeoutError(start, end, id.into())
     }
-    
+
     pub fn route_not_found() -> Self {
         RouterError::RouteNotFound
     }
@@ -72,13 +76,24 @@ impl Display for RouterError {
             RouterError::ExecutionFailed(msg) => write!(f, "Execution failed: {}", msg),
             RouterError::ExchangeCreationFailed(msg) => {
                 write!(f, "Exchange creation failed: {}", msg)
-            },
+            }
             RouterError::ExchangeTimeoutError(start, end, id) => {
-                let duration = end.duration_since(*start).unwrap_or_else(|_| Duration::from_secs(0));
-                write!(f, "Exchanged timed out after {}ms while executing handler '{}'", duration.as_millis(), id)
-            },
+                let duration = end
+                    .duration_since(*start)
+                    .unwrap_or_else(|_| Duration::from_secs(0));
+                write!(
+                    f,
+                    "Exchanged timed out after {}ms while executing handler '{}'",
+                    duration.as_millis(),
+                    id
+                )
+            }
             RouterError::ExchangeStatusError(state, code) => {
-                write!(f, "Returning status code {} because state was marked as {}", code, state)
+                write!(
+                    f,
+                    "Returning status code {} because state was marked as {}",
+                    code, state
+                )
             }
         }
     }
@@ -88,45 +103,53 @@ impl std::error::Error for RouterError {}
 
 /// Main router trait that processes requests through handler chains
 #[async_trait]
-pub trait Router<R, I, O, M>
+pub trait Router<Req, In, Out, Meta>
 where
     Self: Send + Sync,
-    R: Send + Sync,
-    I: Send + Sync,
-    O: Send + Sync,
-    M: Send + Sync,
+    Req: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
 {
     /// Process a request through the router
-    async fn route(&self, request: R) -> Result<O, RouterError>;
+    async fn route(&self, request: Req) -> Result<Out, RouterError>;
 }
+
+
 
 /// Default implementation of the Router trait
-pub struct IdemioRouter<R, I, O, M, F>
+pub struct IdemioRouter<Req, In, Out, Meta, Factory, Ex, Exec>
 where
-    R: Send + Sync,
-    I: Send + Sync,
-    O: Send + Sync,
-    M: Send + Sync,
-    F: ExchangeFactory<R, I, O, M>,
-    R: Send,
+    Req: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
+    Ex: RootExchange<In, Out, Meta>,
+    Exec: HandlerExecutor<Ex, In, Out, Meta>,
+    Factory: ExchangeFactory<Req, In, Out, Meta, Ex>,
+    Req: Send,
 {
-    phantom: PhantomData<R>,
-    exchange_factory: Arc<F>,
-    route_table: PathRouter<I, O, M>,
+    phantom: PhantomData<(Ex, Req)>,
+    exchange_factory: Arc<Factory>,
+    handler_executor: Arc<Exec>,
+    route_table: PathRouter<In, Out, Meta>,
 }
 
-impl<R, I, O, M, F> IdemioRouter<R, I, O, M, F>
+impl<Req, In, Out, Meta, Factory, Type, Exec> IdemioRouter<Req, In, Out, Meta, Factory, Type, Exec>
 where
-    R: Send + Sync,
-    I: Send + Sync,
-    O: Send + Sync,
-    M: Send + Sync,
-    F: ExchangeFactory<R, I, O, M>,
+    Req: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
+    Type: RootExchange<In, Out, Meta>,
+    Exec: HandlerExecutor<Type, In, Out, Meta>,
+    Factory: ExchangeFactory<Req, In, Out, Meta, Type>,
 {
     pub fn new(
-        registry: &HandlerRegistry<I, O, M>,
+        registry: &HandlerRegistry<In, Out, Meta>,
         config: &PathConfig,
-        exchange_factory: F,
+        exchange_factory: Factory,
+        handler_executor: Exec,
     ) -> Self {
         let route_table = match PathRouter::new(config, registry) {
             Ok(table) => table,
@@ -135,6 +158,7 @@ where
         Self {
             phantom: PhantomData::default(),
             exchange_factory: Arc::new(exchange_factory),
+            handler_executor: Arc::new(handler_executor),
             route_table,
         }
     }
@@ -143,94 +167,52 @@ where
         &self,
         request_path: &str,
         request_method: &str,
-    ) -> Option<Arc<LoadedChain<I, O, M>>> {
+    ) -> Option<Arc<LoadedChain<In, Out, Meta>>> {
         self.route_table.lookup(request_path, request_method)
     }
 
     async fn execute_handlers(
         &self,
-        executables: Arc<LoadedChain<I, O, M>>,
-        exchange: &mut Exchange<I, O, M>,
+        executables: Arc<LoadedChain<In, Out, Meta>>,
+        exchange: &mut Type,
     ) -> Result<(), RouterError> {
-        for handler in executables.request_handlers.iter() {
-            let start_time = SystemTime::now();
-            let status = handler
-                .exec(exchange)
-                .await
-                .map_err(|e| RouterError::handler_execution_failed(e))?;
-
-            if status.code().all_flags(ExchangeState::REQUEST_COMPLETED) {
-                return Ok(());
-            }
-            
-            if status.code().all_flags(ExchangeState::TIMEOUT) {
-                let end_time = SystemTime::now();
-                return Err(RouterError::exchange_timeout_error(start_time, end_time, handler.name()))
-            }
-            
-            if status.code().any_flags(ExchangeState::CLIENT_ERROR | ExchangeState::SERVER_ERROR) {
-                log::warn!("Handler '{}' is disabled", handler.name());
-            }
-
-            if status.code().is_error() {
-                todo!("Handle status code errors")
-            }
-        }
-        executables
-            .termination_handler
-            .exec(exchange)
+        self.handler_executor
+            .execute_handlers(executables, exchange)
             .await
-            .map_err(|e| RouterError::handler_execution_failed(e))?;
-        for handler in executables.response_handlers.iter() {
-            let start_time = std::time::SystemTime::now();
-            
-            let status = handler
-                .exec(exchange)
-                .await
-                .map_err(|e| RouterError::handler_execution_failed(e))?;
-
-            if status.code().all_flags(ExchangeState::RESPONSE_COMPLETED) {
-                return Ok(());
-            }
-
-            if status.code().is_error() {
-                todo!("handle status code errors")
-            }
-        }
-
+            .map_err(|_| RouterError::ExecutionFailed("Handler execution failed".to_string()))?;
         Ok(())
     }
 }
 
 #[async_trait]
-impl<R, I, O, M, F> Router<R, I, O, M> for IdemioRouter<R, I, O, M, F>
+impl<Req, In, Out, Meta, Factory, Ex, Exec> Router<Req, In, Out, Meta>
+    for IdemioRouter<Req, In, Out, Meta, Factory, Ex, Exec>
 where
-    R: Send + Sync,
-    I: Send + Sync,
-    O: Send + Sync,
-    M: Send + Sync,
-    F: ExchangeFactory<R, I, O, M>,
+    Req: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
+    Ex: RootExchange<In, Out, Meta>,
+    Exec: HandlerExecutor<Ex, In, Out, Meta> + Send + Sync,
+    Factory: ExchangeFactory<Req, In, Out, Meta, Ex>,
 {
-    async fn route(&self, request: R) -> Result<O, RouterError> {
+    async fn route(&self, request: Req) -> Result<Out, RouterError> {
         let (path, method) = self.exchange_factory.extract_route_info(&request).await?;
-        log::trace!(
-            "Extracted route info from request: {}@{}",
-            &path,
-            &method
-        );
+        log::trace!("Extracted route info from request: {}@{}", &path, &method);
         let executables = self
             .get_handlers_from_route_info(path, method)
             .ok_or(RouterError::RouteNotFound)?;
         let mut exchange = self.exchange_factory.create_exchange(request).await?;
-        log::debug!("Created new exchange {}", exchange.uuid());
+        log::debug!("Created new exchange {}", exchange.get_uuid());
         self.execute_handlers(executables, &mut exchange).await?;
-        exchange.take_output().map_err(|e| todo!())
+        exchange.consume_output().map_err(|e| todo!())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exchange::buffered::BufferedExchange;
     use async_trait::async_trait;
 
     #[tokio::test]
@@ -242,8 +224,13 @@ mod tests {
         struct CustomExchangeFactory;
 
         #[async_trait]
-        impl ExchangeFactory<String, String, String, ()> for CustomExchangeFactory {
-            async fn extract_route_info<'a>(&self, request: &'a String) -> Result<(&'a str, &'a str), RouterError> {
+        impl ExchangeFactory<String, String, String, (), BufferedExchange<String, String, ()>>
+            for CustomExchangeFactory
+        {
+            async fn extract_route_info<'a>(
+                &self,
+                request: &'a String,
+            ) -> Result<(&'a str, &'a str), RouterError> {
                 let mut parts = request.split(':');
                 if let (Some(method), Some(path), Some(_)) =
                     (parts.next(), parts.next(), parts.next())
@@ -259,8 +246,8 @@ mod tests {
             async fn create_exchange(
                 &self,
                 request: String,
-            ) -> Result<Exchange<String, String, ()>, RouterError> {
-                let mut exchange = Exchange::new();
+            ) -> Result<BufferedExchange<String, String, ()>, RouterError> {
+                let mut exchange = BufferedExchange::new();
                 let mut parts = request.split(':');
                 if let (Some(_), Some(_), Some(body)) = (parts.next(), parts.next(), parts.next()) {
                     exchange.save_input(body.to_string());

@@ -14,17 +14,14 @@ use hyper::{Request, Response};
 use serde::{Deserialize, Serialize};
 
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use idemio::config::config::{
-    Config, HandlerConfig, ProgrammaticConfigProvider,
-};
-use idemio::handler::Handler;
+use idemio::handler::BufferedHandler;
 use idemio::handler::config::HandlerId;
-use idemio::router::config::{ChainId, PathConfig};
-use idemio::router::exchange::Exchange;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::{IdemioRouter, Router, config::RouterConfig};
 use idemio::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
 use tokio::net::TcpListener;
+use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
+use idemio::exchange::buffered::BufferedExchange;
+use idemio::router::IdemioRouter;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct IdempotentLoggingHandlerConfig;
@@ -35,13 +32,17 @@ struct IdempotentLoggingHandler {
 }
 
 #[async_trait]
-impl Handler<Bytes, Bytes, Parts> for IdempotentLoggingHandler {
+impl BufferedHandler<Bytes, Bytes, Parts> for IdempotentLoggingHandler {
     async fn exec(
         &self,
-        exchange: &mut Exchange<Bytes, Bytes, Parts>,
+        exchange: &mut BufferedExchange<Bytes, Bytes, Parts>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
         println!("Print something here");
         Ok(HandlerStatus::new(ExchangeState::OK))
+    }
+
+    fn name(&self) -> &str {
+        "idempotent_logging_handler"
     }
 }
 
@@ -56,10 +57,10 @@ struct GreetingHandler {
 }
 
 #[async_trait]
-impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
+impl BufferedHandler<Bytes, Bytes, Parts> for GreetingHandler {
     async fn exec(
         &self,
-        exchange: &mut Exchange<Bytes, Bytes, Parts>,
+        exchange: &mut BufferedExchange<Bytes, Bytes, Parts>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
         let input = exchange.take_input().map_err(|e| HandlerExecutionError {
             message: format!("Failed to get input: {}", e).into(),
@@ -69,6 +70,10 @@ impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
         let response_bytes = Bytes::from(response.into_bytes());
         exchange.save_output(response_bytes);
         Ok(HandlerStatus::new(ExchangeState::OK | ExchangeState::REQUEST_COMPLETED))
+    }
+
+    fn name(&self) -> &str {
+        todo!()
     }
 }
 
@@ -84,10 +89,10 @@ struct EchoHandler {
 }
 
 #[async_trait]
-impl Handler<Bytes, Bytes, Parts> for EchoHandler {
+impl BufferedHandler<Bytes, Bytes, Parts> for EchoHandler {
     async fn exec(
         &self,
-        exchange: &mut Exchange<Bytes, Bytes, Parts>,
+        exchange: &mut BufferedExchange<Bytes, Bytes, Parts>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
         let input = exchange.take_input().map_err(|e| HandlerExecutionError {
             message: format!("Failed to get input: {}", e).into(),
@@ -97,6 +102,10 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
         let response_bytes = Bytes::from(response.into_bytes());
         exchange.save_output(response_bytes);
         Ok(HandlerStatus::new(ExchangeState::OK | ExchangeState::REQUEST_COMPLETED))
+    }
+
+    fn name(&self) -> &str {
+        todo!()
     }
 }
 

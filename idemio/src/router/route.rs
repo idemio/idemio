@@ -1,12 +1,13 @@
-use crate::handler::SharedHandler;
+use crate::handler::{Handler, SharedBufferedHandler};
 use crate::handler::config::HandlerId;
-use crate::handler::registry::HandlerRegistry;
+use crate::handler::registry::{HandlerRegistry, Registry};
 use fnv::{FnvBuildHasher, FnvHasher};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::iter::Filter;
+use std::marker::PhantomData;
 use std::str::{FromStr, Split};
 use std::sync::Arc;
 
@@ -63,10 +64,15 @@ pub struct PathChain {
     pub response_handlers: Vec<String>,
 }
 
-pub struct LoadedChain<I, O, M> {
-    pub request_handlers: Vec<SharedHandler<I, O, M>>,
-    pub termination_handler: SharedHandler<I, O, M>,
-    pub response_handlers: Vec<SharedHandler<I, O, M>>,
+pub struct LoadedChain<Input, Output, Metadata> 
+where
+    Input: Send + Sync,
+    Output: Send + Sync,
+    Metadata: Send + Sync,
+{
+    pub request_handlers: Vec<Arc<Handler<Input, Output, Metadata>>>,
+    pub termination_handler: Arc<Handler<Input, Output, Metadata>>,
+    pub response_handlers: Vec<Arc<Handler<Input, Output, Metadata>>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -122,13 +128,23 @@ impl PathKey {
     }
 }
 
-struct PathNode<I, O, M> {
-    children: HashMap<PathSegment, PathNode<I, O, M>, FnvBuildHasher>,
+struct PathNode<Input, Output, Metadata> 
+where
+    Input: Send + Sync,
+    Output: Send + Sync,
+    Metadata: Send + Sync,
+{
+    children: HashMap<PathSegment, PathNode<Input, Output, Metadata>, FnvBuildHasher>,
     segment_depth: u64,
-    methods: HashMap<String, Arc<LoadedChain<I, O, M>>, FnvBuildHasher>,
+    methods: HashMap<String, Arc<LoadedChain<Input, Output, Metadata>>, FnvBuildHasher>,
 }
 
-impl<I, O, M> Default for PathNode<I, O, M> {
+impl<Input, Output, Metadata> Default for PathNode<Input, Output, Metadata> 
+where
+    Input: Send + Sync,
+    Output: Send + Sync,
+    Metadata: Send + Sync,
+{
     fn default() -> Self {
         Self {
             children: HashMap::with_hasher(FnvBuildHasher::default()),
@@ -138,16 +154,27 @@ impl<I, O, M> Default for PathNode<I, O, M> {
     }
 }
 
-pub struct PathRouter<I, O, M> {
-    static_paths: HashMap<PathKey, Arc<LoadedChain<I, O, M>>, FnvBuildHasher>,
-    nodes: PathNode<I, O, M>,
+pub struct PathRouter<Input, Output, Metadata> 
+where
+    Input: Send + Sync,
+    Output: Send + Sync,
+    Metadata: Send + Sync,
+{
+    static_paths: HashMap<PathKey, Arc<LoadedChain<Input, Output, Metadata>>, FnvBuildHasher>,
+    nodes: PathNode<Input, Output, Metadata>,
 }
 
-impl<I, O, M> PathRouter<I, O, M> {
+impl<Input, Output, Metadata> PathRouter<Input, Output, Metadata>
+where
+    Input: Send + Sync,
+    Output: Send + Sync,
+    Metadata: Send + Sync,
+{
     pub fn new(
         route_config: &PathConfig,
-        registry: &HandlerRegistry<I, O, M>,
-    ) -> Result<Self, PathRouterError> {
+        registry: &HandlerRegistry<Input, Output, Metadata>,
+    ) -> Result<Self, PathRouterError>
+    {
         let mut table = Self {
             static_paths: HashMap::with_hasher(FnvBuildHasher::default()),
             nodes: PathNode::default(),
@@ -160,8 +187,8 @@ impl<I, O, M> PathRouter<I, O, M> {
 
     fn find_in_registry(
         handler: &str,
-        handler_registry: &HandlerRegistry<I, O, M>,
-    ) -> Result<SharedHandler<I, O, M>, PathRouterError> {
+        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
+    ) -> Result<Arc<Handler<Input, Output, Metadata>>, PathRouterError> {
         let handler_id = HandlerId::new(handler);
         match handler_registry.find_with_id(&handler_id) {
             Ok(handler) => Ok(handler),
@@ -171,8 +198,8 @@ impl<I, O, M> PathRouter<I, O, M> {
 
     fn find_all_in_registry(
         handlers: &[String],
-        handler_registry: &HandlerRegistry<I, O, M>,
-    ) -> Result<Vec<SharedHandler<I, O, M>>, PathRouterError> {
+        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
+    ) -> Result<Vec<Arc<Handler<Input, Output, Metadata>>>, PathRouterError> {
         let mut registered_handlers = vec![];
         for handler in handlers {
             let registered_handler = Self::find_in_registry(handler, handler_registry)?;
@@ -182,9 +209,9 @@ impl<I, O, M> PathRouter<I, O, M> {
     }
 
     fn load_handlers(
-        handler_registry: &HandlerRegistry<I, O, M>,
+        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
         path_chain: &PathChain,
-    ) -> Result<LoadedChain<I, O, M>, PathRouterError> {
+    ) -> Result<LoadedChain<Input, Output, Metadata>, PathRouterError> {
         let registered_request_handlers =
             Self::find_all_in_registry(&path_chain.request_handlers, handler_registry)?;
         let registered_termination_handler =
@@ -201,7 +228,7 @@ impl<I, O, M> PathRouter<I, O, M> {
     fn parse_config(
         &mut self,
         route_config: &PathConfig,
-        handler_registry: &HandlerRegistry<I, O, M>,
+        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
     ) -> Result<(), PathRouterError> {
         for (path, methods) in route_config.paths.iter() {
             // static paths (ones that do not contain '*') should be added to the fast path.
@@ -248,14 +275,14 @@ impl<I, O, M> PathRouter<I, O, M> {
         path.split('/').filter(|s| !s.is_empty())
     }
 
-    pub fn lookup(&self, request_path: &str, request_method: &str) -> Option<Arc<LoadedChain<I, O, M>>> {
+    pub fn lookup(&self, request_path: &str, request_method: &str) -> Option<Arc<LoadedChain<Input, Output, Metadata>>> {
 
         if let Some(handlers) = self.static_paths.get(&PathKey::new(request_method, request_path)) {
             return Some(handlers.clone());
         }
 
         let req_path_segments = Self::split_path(request_path);
-        let mut best_match: Option<&PathNode<I, O, M>> = None;
+        let mut best_match: Option<&PathNode<Input, Output, Metadata>> = None;
         let mut max_depth = 0;
         let mut current_node = &self.nodes;
 
@@ -289,23 +316,23 @@ impl<I, O, M> PathRouter<I, O, M> {
 
 #[cfg(test)]
 mod test {
-    use crate::handler::Handler;
+    use crate::handler::{BufferedHandler, Handler};
     use crate::handler::config::HandlerId;
     use crate::handler::registry::HandlerRegistry;
-    use crate::router::exchange::Exchange;
     use crate::router::route::{PathChain, PathConfig, PathRouter};
     use crate::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use crate::exchange::buffered::BufferedExchange;
 
     #[derive(Debug)]
     struct DummyHandler;
     #[async_trait]
-    impl Handler<(), (), ()> for DummyHandler {
+    impl BufferedHandler<(), (), ()> for DummyHandler {
         async fn exec(
             &self,
-            _exchange: &mut Exchange<(), (), ()>,
+            _exchange: &mut BufferedExchange<(), (), ()>,
         ) -> Result<HandlerStatus, HandlerExecutionError> {
             Ok(HandlerStatus::new(ExchangeState::OK))
         }
@@ -319,16 +346,16 @@ mod test {
     fn router_v2_test() {
         let mut registry = HandlerRegistry::<(), (), ()>::new();
         registry
-            .register_handler(&HandlerId::new("test1"), Arc::new(DummyHandler))
+            .register_handler(&HandlerId::new("test1"), Handler::Buffered(Arc::new(DummyHandler)))
             .unwrap();
         registry
-            .register_handler(&HandlerId::new("test2"), Arc::new(DummyHandler))
+            .register_handler(&HandlerId::new("test2"), Handler::Buffered(Arc::new(DummyHandler)))
             .unwrap();
         registry
-            .register_handler(&HandlerId::new("test3"), Arc::new(DummyHandler))
+            .register_handler(&HandlerId::new("test3"), Handler::Buffered(Arc::new(DummyHandler)))
             .unwrap();
         registry
-            .register_handler(&HandlerId::new("test4"), Arc::new(DummyHandler))
+            .register_handler(&HandlerId::new("test4"), Handler::Buffered(Arc::new(DummyHandler)))
             .unwrap();
 
         let mut paths = HashMap::new();

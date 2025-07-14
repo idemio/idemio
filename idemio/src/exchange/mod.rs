@@ -1,168 +1,37 @@
+pub mod buffered;
+#[cfg(feature = "stream")]
+pub mod streaming;
+
+
 use fnv::FnvHasher;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
+use async_trait::async_trait;
 use uuid::Uuid;
 
-pub struct Exchange<I, O, M> {
-    uuid: Uuid,
-    metadata: Option<M>,
-    input: Option<I>,
-    output: Option<O>,
-    input_listeners: Vec<Callback<I>>,
-    output_listeners: Vec<Callback<O>>,
-    attachments: Attachments,
-}
-
-impl<I, O, M> Exchange<I, O, M>
+#[async_trait]
+pub trait RootExchange<I, O, M> 
 where
+    Self: Sync + Send,
     I: Send + Sync,
     O: Send + Sync,
     M: Send + Sync,
 {
-    pub fn new() -> Self {
-        let uuid = Uuid::new_v4();
-        Self {
-            uuid,
-            metadata: None,
-            input: None,
-            output: None,
-            input_listeners: vec![],
-            output_listeners: vec![],
-            attachments: Attachments::new(),
-        }
-    }
-
-    pub fn uuid(&self) -> &Uuid {
-        &self.uuid
-    }
-
-    pub fn add_metadata(&mut self, metadata: M) {
-        self.metadata = Some(metadata);
-    }
-
-    pub fn attachments(&self) -> &Attachments {
-        &self.attachments
-    }
-
-    pub fn attachments_mut(&mut self) -> &mut Attachments {
-        &mut self.attachments
-    }
-
-    pub fn add_input_listener(
-        &mut self,
-        callback: impl FnMut(&mut I, &mut Attachments) + Send + 'static,
-    ) {
-        self.input_listeners.push(Callback::new(callback));
-    }
-
-    pub fn add_output_listener(
-        &mut self,
-        callback: impl FnMut(&mut O, &mut Attachments) + Send + 'static,
-    ) {
-        self.output_listeners.push(Callback::new(callback));
-    }
-
-    fn execute_input_callbacks(&mut self) -> Result<(), ExchangeError> {
-        if let Some(input) = &mut self.input {
-            for mut callback in &mut self.input_listeners.drain(..) {
-                callback.invoke(input, &mut self.attachments);
-            }
-            Ok(())
-        } else {
-            Err(ExchangeError::input_callback_error(
-                &self.uuid,
-                "Exchange does not contain an input to perform callbacks on",
-            ))
-        }
-    }
-
-    fn execute_output_callbacks(&mut self) -> Result<(), ExchangeError> {
-        if let Some(output) = &mut self.output {
-            for mut callback in &mut self.output_listeners.drain(..) {
-                callback.invoke(output, &mut self.attachments);
-            }
-            Ok(())
-        } else {
-            Err(ExchangeError::output_callback_error(
-                &self.uuid,
-                "Exchange does not contain an output to perform callbacks on",
-            ))
-        }
-    }
-
-    pub fn save_input(&mut self, request: I) {
-        self.input = Some(request);
-    }
-
-    pub fn input(&self) -> Result<&I, ExchangeError> {
-        match &self.input {
-            Some(out) => Ok(out),
-            None => Err(ExchangeError::input_read_error(
-                &self.uuid,
-                "Exchange does not contain any input data to read.",
-            )),
-        }
-    }
-
-    pub fn input_mut(&mut self) -> Result<&mut I, ExchangeError> {
-        match &mut self.input {
-            Some(out) => Ok(out),
-            None => Err(ExchangeError::input_read_error(
-                &self.uuid,
-                "Exchange does not contain any input data to modify.",
-            )),
-        }
-    }
-
-    pub fn take_input(&mut self) -> Result<I, ExchangeError> {
-        match self.execute_input_callbacks() {
-            Ok(_) => self.input.take().ok_or_else(|| {
-                ExchangeError::input_take_error(
-                    &self.uuid,
-                    "Exchange does not contain any input data to consume.",
-                )
-            }),
-            Err(e) => Err(e),
-        }
-    }
-
-    pub fn save_output(&mut self, response: O) {
-        self.output = Some(response);
-    }
-
-    pub fn output(&self) -> Result<&O, ExchangeError> {
-        match &self.output {
-            Some(out) => Ok(out),
-            None => Err(ExchangeError::output_read_error(
-                &self.uuid,
-                "Exchange contains no output data to read.",
-            )),
-        }
-    }
-
-    pub fn output_mut(&mut self) -> Result<&mut O, ExchangeError> {
-        match &mut self.output {
-            Some(out) => Ok(out),
-            None => Err(ExchangeError::output_read_error(
-                &self.uuid,
-                "Exchange does not contain any output data to modify.",
-            )),
-        }
-    }
-
-    pub fn take_output(&mut self) -> Result<O, ExchangeError> {
-        match self.execute_output_callbacks() {
-            Ok(_) => self.output.take().ok_or_else(|| {
-                ExchangeError::output_read_error(
-                    &self.uuid,
-                    "Exchange does not contain any output data to consume.",
-                )
-            }),
-            Err(e) => Err(e),
-        }
-    }
+    fn get_metadata(&self) -> &M;
+    fn get_metadata_mut(&mut self) -> &mut M;
+    fn get_attachments(&self) -> &Attachments;
+    fn get_attachments_mut(&mut self) -> &mut Attachments;
+    fn get_uuid(&self) -> &Uuid;
+    fn set_input(&mut self, input: I);
+    async fn get_input(&mut self) -> Result<&I, ExchangeError>;
+    async fn get_output(&mut self) -> Result<&O, ExchangeError>;
+    async fn consume_input(&mut self) -> Result<I, ExchangeError>;
+    fn set_output(&mut self, output: O);
+    async fn consume_output(&mut self) -> Result<O, ExchangeError>;
+    fn add_input_callback(&mut self, callback: Callback<I>);
+    fn add_output_callback(&mut self, callback: Callback<O>);
 }
 
 pub struct Attachments {
@@ -298,14 +167,14 @@ impl AttachmentKey {
 }
 
 pub struct Callback<T> {
-    callback: Box<dyn FnMut(&mut T, &mut Attachments) + Send>,
+    callback: Box<dyn FnMut(&mut T, &mut Attachments) + Send + Sync>,
 }
 
 impl<T> Callback<T>
 where
     T: Send,
 {
-    pub fn new(callback: impl FnMut(&mut T, &mut Attachments) + Send + 'static) -> Self {
+    pub fn new(callback: impl FnMut(&mut T, &mut Attachments) + Send + Sync + 'static) -> Self {
         Self {
             callback: Box::new(callback),
         }
@@ -318,13 +187,13 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::router::exchange::Exchange;
+    use crate::exchange::buffered::BufferedExchange;
 
     struct TestStruct;
 
     #[test]
     fn test_attachments() {
-        let mut exchange: Exchange<(), (), ()> = Exchange::new();
+        let mut exchange: BufferedExchange<(), (), ()> = BufferedExchange::new();
         let key1 = "test_key1";
         let key2 = "test_key2";
         let key3 = "test_key3";
@@ -351,7 +220,7 @@ mod test {
 
     #[test]
     fn test_callbacks() {
-        let mut exchange: Exchange<String, (), ()> = Exchange::new();
+        let mut exchange: BufferedExchange<String, (), ()> = BufferedExchange::new();
         exchange.save_input(String::from("hello"));
         exchange.add_input_listener(|input, _| {
             input.push_str(" world!");
@@ -368,7 +237,7 @@ mod test {
 
     #[test]
     fn test_consume() {
-        let mut exchange: Exchange<String, (), ()> = Exchange::new();
+        let mut exchange: BufferedExchange<String, (), ()> = BufferedExchange::new();
 
         // consume before adding data
         let invalid_consume = exchange.take_input();

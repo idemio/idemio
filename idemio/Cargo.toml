@@ -8,6 +8,7 @@ authors = [" Kalev Gonvick kalev.gonvick@idemio.dev"]
 
 [features]
 hyper = ["dep:hyper", "dep:http-body-util"]
+stream = ["dep:futures-util"]
 
 [profile.release]
 strip = "symbols"
@@ -26,6 +27,8 @@ uuid = { version = "1.17.0", features = ["v4", "serde"] }
 hyper = { version = "1.6.0", features = ["full"], optional = true }
 http-body-util = { version = "0.1.3" , optional = true}
 chrono = "0.4.41"
+futures-util = { version = "0.3.31" , optional = true}
+
 
 [dev-dependencies]
 tokio = { version = "1.45.1" , features = ["macros", "rt", "rt-multi-thread"]}
