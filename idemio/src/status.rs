@@ -15,13 +15,13 @@ impl Display for HandlerExecutionError<'_> {
 
 #[derive(Debug)]
 pub struct HandlerStatus<'a> {
-    pub(crate) code: Code,
+    pub(crate) code: ExchangeState,
     message: Option<Cow<'a, str>>,
     details: Option<Cow<'a, str>>,
 }
 
 impl<'a> HandlerStatus<'a> {
-    pub fn code(&self) -> Code {
+    pub fn code(&self) -> ExchangeState {
         self.code
     }
     pub fn message(&self) -> &str {
@@ -40,7 +40,7 @@ impl<'a> HandlerStatus<'a> {
     }
 
 
-    pub fn new(code: Code) -> HandlerStatus<'a> {
+    pub fn new(code: ExchangeState) -> HandlerStatus<'a> {
         Self {
             code,
             message: None,
@@ -62,61 +62,72 @@ impl<'a> HandlerStatus<'a> {
 
 #[derive(Clone, Copy)]
 #[derive(Debug)]
-pub struct Code(pub i32);
+pub struct ExchangeState(pub i32);
 
-impl Code {
+impl ExchangeState {
     pub const OK: Self = Self(1);
     pub const REQUEST_COMPLETED: Self = Self(1 << 1);
-    pub const SERVER_ERROR: Self = Self(1 << 2);
-    pub const CLIENT_ERROR: Self = Self(1 << 3);
-    pub const DISABLED: Self = Self(1 << 4);
-    pub const TIMEOUT: Self = Self(1 << 5);
-    pub const CONTINUE: Self = Self(1 << 6);
+    pub const RESPONSE_COMPLETED: Self = Self(1 << 2);
+    pub const SERVER_ERROR: Self = Self(1 << 3);
+    pub const CLIENT_ERROR: Self = Self(1 << 4);
+    pub const DISABLED: Self = Self(1 << 5);
+    pub const TIMEOUT: Self = Self(1 << 6);
+    pub const CONTINUE: Self = Self(1 << 7);
 
-    pub fn any_flags(&self, flags: Code) -> bool {
+    pub fn any_flags(&self, flags: ExchangeState) -> bool {
         self.0 & flags.0 != 0
     }
 
-    pub fn any_flags_clear(&self, flags: Code) -> bool {
+    pub fn any_flags_clear(&self, flags: ExchangeState) -> bool {
         self.0 & flags.0 != flags.0
     }
 
-    pub fn all_flags(&self, flags: Code) -> bool {
+    pub fn all_flags(&self, flags: ExchangeState) -> bool {
         self.0 & flags.0 == flags.0
     }
 
-    pub fn all_flags_clear(&self, flags: Code) -> bool {
+    pub fn all_flags_clear(&self, flags: ExchangeState) -> bool {
         self.0 & flags.0 == 0
+    }
+    
+    pub fn is_complete(&self) -> bool {
+        self.all_flags(ExchangeState::REQUEST_COMPLETED | ExchangeState::RESPONSE_COMPLETED)
     }
     
     pub fn is_error(&self) -> bool {
         self.any_flags(
-            Code::CLIENT_ERROR
-                | Code::SERVER_ERROR
-                | Code::TIMEOUT
+            ExchangeState::CLIENT_ERROR
+                | ExchangeState::SERVER_ERROR
+                | ExchangeState::TIMEOUT
         )
     }
 }
 
-impl PartialEq for Code {
+impl Display for ExchangeState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:b}", self.0)
+    }
+}
+
+impl PartialEq for ExchangeState {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0
     }
 }
 
-impl BitOrAssign for Code {
+impl BitOrAssign for ExchangeState {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0
     }
 }
 
-impl BitAndAssign for Code {
+impl BitAndAssign for ExchangeState {
     fn bitand_assign(&mut self, rhs: Self) {
         self.0 &= rhs.0
     }
 }
 
-impl Not for Code {
+impl Not for ExchangeState {
     type Output = Self;
 
     fn not(self) -> Self::Output {
@@ -124,14 +135,14 @@ impl Not for Code {
     }
 }
 
-impl BitAnd for Code {
+impl BitAnd for ExchangeState {
     type Output = Self;
     fn bitand(self, rhs: Self) -> Self::Output {
         Self(self.0 & rhs.0)
     }
 }
 
-impl BitOr for Code {
+impl BitOr for ExchangeState {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self::Output {
         Self(self.0 | rhs.0)
@@ -140,20 +151,20 @@ impl BitOr for Code {
 
 #[cfg(test)]
 mod tests {
-    use crate::status::Code;
+    use crate::status::ExchangeState;
 
     #[test]
     fn test_status_flags() {
-        let mut test_code = Code::OK;
-        test_code |= Code::REQUEST_COMPLETED;
-        assert!(test_code.all_flags(Code::OK | Code::REQUEST_COMPLETED));
-        assert!(test_code.all_flags_clear(Code::DISABLED | Code::TIMEOUT | Code::CONTINUE | Code::CLIENT_ERROR | Code::SERVER_ERROR));
+        let mut test_code = ExchangeState::OK;
+        test_code |= ExchangeState::REQUEST_COMPLETED;
+        assert!(test_code.all_flags(ExchangeState::OK | ExchangeState::REQUEST_COMPLETED));
+        assert!(test_code.all_flags_clear(ExchangeState::DISABLED | ExchangeState::TIMEOUT | ExchangeState::CONTINUE | ExchangeState::CLIENT_ERROR | ExchangeState::SERVER_ERROR));
     }
 
     #[test]
     fn test_status_constructs() {
-        let test_code1 = Code::OK | Code::SERVER_ERROR;
-        let test_code2 = Code::from(test_code1 | Code::REQUEST_COMPLETED);
-        assert!(test_code2.all_flags(Code::OK | Code::SERVER_ERROR | Code::REQUEST_COMPLETED));
+        let test_code1 = ExchangeState::OK | ExchangeState::SERVER_ERROR;
+        let test_code2 = ExchangeState::from(test_code1 | ExchangeState::REQUEST_COMPLETED);
+        assert!(test_code2.all_flags(ExchangeState::OK | ExchangeState::SERVER_ERROR | ExchangeState::REQUEST_COMPLETED));
     }
 }
