@@ -53,7 +53,7 @@ where
     O: Send + Sync,
     M: Send + Sync,
 {
-    handlers: DashMap<HandlerId, Arc<Handler<I, O, M>>, fnv::FnvBuildHasher>,
+    handlers: DashMap<HandlerId, Arc<dyn Handler<I, O, M>>, fnv::FnvBuildHasher>,
 }
 
 impl<I, O, M> HandlerRegistry<I, O, M>
@@ -69,14 +69,14 @@ where
         }
     }
     
-    pub(crate) fn find_with_id<'a>(&self, id: &'a HandlerId) -> Result<Arc<Handler<I, O, M>>, HandlerRegistryError<'a>> {
+    pub(crate) fn find_with_id<'a>(&self, id: &'a HandlerId) -> Result<Arc<dyn Handler<I, O, M>>, HandlerRegistryError<'a>> {
         match self.handlers.get(id) {
             None => Err(HandlerRegistryError::missing_handler(id)),
             Some(handler) => Ok(handler.value().clone()),
         }
     }
 
-    pub fn register_handler<'a>(&mut self, handler_id: &'a HandlerId, handler: Handler<I, O, M>) -> Result<(), HandlerRegistryError<'a>> {
+    pub fn register_handler<'a>(&mut self, handler_id: &'a HandlerId, handler: impl Handler<I, O, M> + 'static) -> Result<(), HandlerRegistryError<'a>> {
         match self.handlers.entry(handler_id.clone()) {
             Entry::Occupied(_) => Err(HandlerRegistryError::conflicting_handler_id(handler_id)),
             Entry::Vacant(entry) => {

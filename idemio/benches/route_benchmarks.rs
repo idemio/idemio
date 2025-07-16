@@ -1,13 +1,12 @@
 use async_trait::async_trait;
 use criterion::{Criterion, criterion_group, criterion_main};
-use idemio::handler::{BufferedHandler, Handler};
+use idemio::handler::{Handler};
 use idemio::handler::registry::HandlerRegistry;
 use idemio::router::route::{PathChain, PathConfig, PathRouter};
 use idemio::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
 use std::collections::HashMap;
 use std::hint::black_box;
-use std::sync::Arc;
-use idemio::exchange::buffered::BufferedExchange;
+use idemio::exchange::unified::Exchange;
 use idemio::handler::config::HandlerId;
 // This is a simple benchmark to aid development of the router
 
@@ -15,10 +14,10 @@ use idemio::handler::config::HandlerId;
 struct DummyHandler;
 
 #[async_trait]
-impl BufferedHandler<(), (), ()> for DummyHandler {
-    async fn exec(
+impl Handler<(), (), ()> for DummyHandler {
+    async fn exec<'a>(
         &self,
-        _exchange: &mut BufferedExchange<(), (), ()>,
+        _exchange: &mut Exchange<'a, (), (), ()>,
     ) -> Result<HandlerStatus, HandlerExecutionError> {
         Ok(HandlerStatus::new(ExchangeState::OK))
     }
@@ -31,16 +30,16 @@ impl BufferedHandler<(), (), ()> for DummyHandler {
 fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathRouter<(), (), ()> {
     let mut registry = HandlerRegistry::new();
     registry
-        .register_handler(&HandlerId::new("test1"), Handler::Buffered(Arc::new(DummyHandler)))
+        .register_handler(&HandlerId::new("test1"), DummyHandler)
         .unwrap();
     registry
-        .register_handler(&HandlerId::new("test2"), Handler::Buffered(Arc::new(DummyHandler)))
+        .register_handler(&HandlerId::new("test2"), DummyHandler)
         .unwrap();
     registry
-        .register_handler(&HandlerId::new("test3"), Handler::Buffered(Arc::new(DummyHandler)))
+        .register_handler(&HandlerId::new("test3"), DummyHandler)
         .unwrap();
     registry
-        .register_handler(&HandlerId::new("test4"), Handler::Buffered(Arc::new(DummyHandler)))
+        .register_handler(&HandlerId::new("test4"), DummyHandler)
         .unwrap();
 
     let mut paths = HashMap::new();

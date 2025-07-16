@@ -2,7 +2,6 @@ pub mod factory;
 pub mod route;
 mod executor;
 
-use crate::exchange::RootExchange;
 use crate::handler::config::{ChainId, HandlerId};
 use crate::handler::registry::HandlerRegistry;
 use crate::router::factory::ExchangeFactory;
@@ -13,6 +12,7 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use crate::exchange::unified::Exchange;
 use crate::router::executor::HandlerExecutor;
 
 #[derive(Debug)]
@@ -118,32 +118,31 @@ where
 
 
 /// Default implementation of the Router trait
-pub struct IdemioRouter<Req, In, Out, Meta, Factory, Ex, Exec>
+pub struct IdemioRouter<'a, Req, In, Out, Meta, Factory, Exec>
 where
     Req: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Ex: RootExchange<In, Out, Meta>,
-    Exec: HandlerExecutor<Ex, In, Out, Meta>,
-    Factory: ExchangeFactory<Req, In, Out, Meta, Ex>,
+    Exec: HandlerExecutor<Exchange<'a, In, Out, Meta>, In, Out, Meta> + Send + Sync,
+    Factory: ExchangeFactory<Req, In, Out, Meta, Exchange<'a, In, Out, Meta>>,
     Req: Send,
 {
-    phantom: PhantomData<(Ex, Req)>,
+    phantom: PhantomData<(Req, &'a ())>,
     exchange_factory: Arc<Factory>,
     handler_executor: Arc<Exec>,
     route_table: PathRouter<In, Out, Meta>,
 }
 
-impl<Req, In, Out, Meta, Factory, Type, Exec> IdemioRouter<Req, In, Out, Meta, Factory, Type, Exec>
+impl<'a, Req, In, Out, Meta, Factory, Exec> IdemioRouter<'a, Req, In, Out, Meta, Factory, Exec>
 where
     Req: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Type: RootExchange<In, Out, Meta>,
-    Exec: HandlerExecutor<Type, In, Out, Meta>,
-    Factory: ExchangeFactory<Req, In, Out, Meta, Type>,
+    Exec: HandlerExecutor<Exchange<'a, In, Out, Meta>, In, Out, Meta> + Send + Sync,
+    Factory: ExchangeFactory<Req, In, Out, Meta, Exchange<'a, In, Out, Meta>>,
+    Req: Send,
 {
     pub fn new(
         registry: &HandlerRegistry<In, Out, Meta>,
@@ -174,7 +173,7 @@ where
     async fn execute_handlers(
         &self,
         executables: Arc<LoadedChain<In, Out, Meta>>,
-        exchange: &mut Type,
+        exchange: &mut Exchange<'a, In, Out, Meta>,
     ) -> Result<(), RouterError> {
         self.handler_executor
             .execute_handlers(executables, exchange)
@@ -182,37 +181,42 @@ where
             .map_err(|_| RouterError::ExecutionFailed("Handler execution failed".to_string()))?;
         Ok(())
     }
+
 }
 
 #[async_trait]
-impl<Req, In, Out, Meta, Factory, Ex, Exec> Router<Req, In, Out, Meta>
-    for IdemioRouter<Req, In, Out, Meta, Factory, Ex, Exec>
+impl<'a, Req, In, Out, Meta, Factory, Exec> Router<Req, In, Out, Meta>
+for IdemioRouter<'a, Req, In, Out, Meta, Factory, Exec>
 where
     Req: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Ex: RootExchange<In, Out, Meta>,
-    Exec: HandlerExecutor<Ex, In, Out, Meta> + Send + Sync,
-    Factory: ExchangeFactory<Req, In, Out, Meta, Ex>,
+    Exec: HandlerExecutor<Exchange<'a, In, Out, Meta>, In, Out, Meta> + Send + Sync,
+    Factory: ExchangeFactory<Req, In, Out, Meta, Exchange<'a, In, Out, Meta>>,
 {
     async fn route(&self, request: Req) -> Result<Out, RouterError> {
         let (path, method) = self.exchange_factory.extract_route_info(&request).await?;
         log::trace!("Extracted route info from request: {}@{}", &path, &method);
+
         let executables = self
             .get_handlers_from_route_info(path, method)
             .ok_or(RouterError::RouteNotFound)?;
+
         let mut exchange = self.exchange_factory.create_exchange(request).await?;
-        log::debug!("Created new exchange {}", exchange.get_uuid());
+
         self.execute_handlers(executables, &mut exchange).await?;
-        exchange.consume_output().map_err(|e| todo!())
+
+        // Use UnifiedExchange's take_output method
+        exchange.take_output().await
+            .map_err(|e| RouterError::ExecutionFailed(format!("Failed to get output: {}", e)))
     }
 }
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exchange::buffered::BufferedExchange;
     use async_trait::async_trait;
 
     #[tokio::test]
@@ -224,7 +228,7 @@ mod tests {
         struct CustomExchangeFactory;
 
         #[async_trait]
-        impl ExchangeFactory<String, String, String, (), BufferedExchange<String, String, ()>>
+        impl<'b> ExchangeFactory<String, String, String, (), Exchange<'b, String, String, ()>>
             for CustomExchangeFactory
         {
             async fn extract_route_info<'a>(
@@ -246,8 +250,8 @@ mod tests {
             async fn create_exchange(
                 &self,
                 request: String,
-            ) -> Result<BufferedExchange<String, String, ()>, RouterError> {
-                let mut exchange = BufferedExchange::new();
+            ) -> Result<Exchange<'b, String, String, ()>, RouterError> {
+                let mut exchange = Exchange::new();
                 let mut parts = request.split(':');
                 if let (Some(_), Some(_), Some(body)) = (parts.next(), parts.next(), parts.next()) {
                     exchange.save_input(body.to_string());
@@ -263,7 +267,7 @@ mod tests {
         assert_eq!(method, "GET");
         assert_eq!(path, "/test");
 
-        let exchange = factory.create_exchange(custom_request).await.unwrap();
-        assert_eq!(exchange.input().unwrap(), "body_content");
+        let mut exchange = factory.create_exchange(custom_request).await.unwrap();
+        assert_eq!(exchange.input().await.unwrap(), "body_content");
     }
 }

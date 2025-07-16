@@ -5,7 +5,6 @@ use async_trait::async_trait;
 pub trait ExchangeFactory<Request, Input, Output, Metadata, ExchangeType>
 where
     Self: Send + Sync,
-    ExchangeType: Send + Sync,
     Request: Send + Sync,
     Input: Send + Sync,
     Output: Send + Sync,
@@ -24,8 +23,7 @@ pub mod hyper {
     use async_trait::async_trait;
     use http_body_util::BodyExt;
     use hyper::Request;
-
-    use crate::exchange::buffered::BufferedExchange;
+    use crate::exchange::unified::Exchange;
     use crate::router::RouterError;
     use crate::router::factory::ExchangeFactory;
     use hyper::body::{Bytes, Incoming};
@@ -34,19 +32,18 @@ pub mod hyper {
     pub struct HyperExchangeFactory;
 
     #[async_trait]
-    impl
-        ExchangeFactory<
-            Request<Incoming>,
-            Bytes,
-            Bytes,
-            Parts,
-            BufferedExchange<Bytes, Bytes, Parts>,
-        > for HyperExchangeFactory
+    impl<'a> ExchangeFactory<
+        Request<Incoming>,
+        Bytes,
+        Bytes,
+        Parts,
+        Exchange<'a, Bytes, Bytes, Parts>,
+    > for HyperExchangeFactory
     {
-        async fn extract_route_info<'a>(
+        async fn extract_route_info<'b>(
             &self,
-            request: &'a Request<Incoming>,
-        ) -> Result<(&'a str, &'a str), RouterError> {
+            request: &'b Request<Incoming>,
+        ) -> Result<(&'b str, &'b str), RouterError> {
             let method = request.method().as_str();
             let path = request.uri().path();
             Ok((path, method))
@@ -55,16 +52,17 @@ pub mod hyper {
         async fn create_exchange(
             &self,
             request: Request<Incoming>,
-        ) -> Result<BufferedExchange<Bytes, Bytes, Parts>, RouterError> {
-            let mut exchange = BufferedExchange::new();
+        ) -> Result<Exchange<'a, Bytes, Bytes, Parts>, RouterError> {
+            let mut exchange = Exchange::new();
             let (parts, body) = request.into_parts();
             let collected = body.collect().await;
             let body_bytes = collected
                 .map_err(|e| RouterError::ExchangeCreationFailed(e.to_string()))?
                 .to_bytes();
             exchange.save_input(body_bytes);
-            exchange.add_metadata(parts);
+            exchange.set_metadata(parts);
             Ok(exchange)
         }
     }
 }
+

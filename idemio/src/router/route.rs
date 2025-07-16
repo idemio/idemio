@@ -70,9 +70,9 @@ where
     Output: Send + Sync,
     Metadata: Send + Sync,
 {
-    pub request_handlers: Vec<Arc<Handler<Input, Output, Metadata>>>,
-    pub termination_handler: Arc<Handler<Input, Output, Metadata>>,
-    pub response_handlers: Vec<Arc<Handler<Input, Output, Metadata>>>,
+    pub request_handlers: Vec<Arc<dyn Handler<Input, Output, Metadata>>>,
+    pub termination_handler: Arc<dyn Handler<Input, Output, Metadata>>,
+    pub response_handlers: Vec<Arc<dyn Handler<Input, Output, Metadata>>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -188,7 +188,7 @@ where
     fn find_in_registry(
         handler: &str,
         handler_registry: &HandlerRegistry<Input, Output, Metadata>,
-    ) -> Result<Arc<Handler<Input, Output, Metadata>>, PathRouterError> {
+    ) -> Result<Arc<dyn Handler<Input, Output, Metadata>>, PathRouterError> {
         let handler_id = HandlerId::new(handler);
         match handler_registry.find_with_id(&handler_id) {
             Ok(handler) => Ok(handler),
@@ -199,7 +199,7 @@ where
     fn find_all_in_registry(
         handlers: &[String],
         handler_registry: &HandlerRegistry<Input, Output, Metadata>,
-    ) -> Result<Vec<Arc<Handler<Input, Output, Metadata>>>, PathRouterError> {
+    ) -> Result<Vec<Arc<dyn Handler<Input, Output, Metadata>>>, PathRouterError> {
         let mut registered_handlers = vec![];
         for handler in handlers {
             let registered_handler = Self::find_in_registry(handler, handler_registry)?;
@@ -316,7 +316,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::handler::{BufferedHandler, Handler};
+    use crate::handler::{Handler};
     use crate::handler::config::HandlerId;
     use crate::handler::registry::HandlerRegistry;
     use crate::router::route::{PathChain, PathConfig, PathRouter};
@@ -324,15 +324,15 @@ mod test {
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use crate::exchange::buffered::BufferedExchange;
+    use crate::exchange::unified::Exchange;
 
     #[derive(Debug)]
     struct DummyHandler;
     #[async_trait]
-    impl BufferedHandler<(), (), ()> for DummyHandler {
-        async fn exec(
+    impl Handler<(), (), ()> for DummyHandler {
+        async fn exec<'a>(
             &self,
-            _exchange: &mut BufferedExchange<(), (), ()>,
+            _exchange: &mut Exchange<'a, (), (), ()>,
         ) -> Result<HandlerStatus, HandlerExecutionError> {
             Ok(HandlerStatus::new(ExchangeState::OK))
         }
@@ -346,16 +346,16 @@ mod test {
     fn router_v2_test() {
         let mut registry = HandlerRegistry::<(), (), ()>::new();
         registry
-            .register_handler(&HandlerId::new("test1"), Handler::Buffered(Arc::new(DummyHandler)))
+            .register_handler(&HandlerId::new("test1"), DummyHandler)
             .unwrap();
         registry
-            .register_handler(&HandlerId::new("test2"), Handler::Buffered(Arc::new(DummyHandler)))
+            .register_handler(&HandlerId::new("test2"), DummyHandler)
             .unwrap();
         registry
-            .register_handler(&HandlerId::new("test3"), Handler::Buffered(Arc::new(DummyHandler)))
+            .register_handler(&HandlerId::new("test3"), DummyHandler)
             .unwrap();
         registry
-            .register_handler(&HandlerId::new("test4"), Handler::Buffered(Arc::new(DummyHandler)))
+            .register_handler(&HandlerId::new("test4"), DummyHandler)
             .unwrap();
 
         let mut paths = HashMap::new();

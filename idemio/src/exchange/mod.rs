@@ -1,38 +1,12 @@
-pub mod buffered;
-#[cfg(feature = "stream")]
-pub mod streaming;
-
+pub mod unified;
+pub mod collector;
 
 use fnv::FnvHasher;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
-use async_trait::async_trait;
 use uuid::Uuid;
-
-#[async_trait]
-pub trait RootExchange<I, O, M> 
-where
-    Self: Sync + Send,
-    I: Send + Sync,
-    O: Send + Sync,
-    M: Send + Sync,
-{
-    fn get_metadata(&self) -> &M;
-    fn get_metadata_mut(&mut self) -> &mut M;
-    fn get_attachments(&self) -> &Attachments;
-    fn get_attachments_mut(&mut self) -> &mut Attachments;
-    fn get_uuid(&self) -> &Uuid;
-    fn set_input(&mut self, input: I);
-    async fn get_input(&mut self) -> Result<&I, ExchangeError>;
-    async fn get_output(&mut self) -> Result<&O, ExchangeError>;
-    async fn consume_input(&mut self) -> Result<I, ExchangeError>;
-    fn set_output(&mut self, output: O);
-    async fn consume_output(&mut self) -> Result<O, ExchangeError>;
-    fn add_input_callback(&mut self, callback: Callback<I>);
-    fn add_output_callback(&mut self, callback: Callback<O>);
-}
 
 pub struct Attachments {
     attachments: HashMap<AttachmentKey, Box<dyn Any + Send + Sync>, fnv::FnvBuildHasher>,
@@ -81,6 +55,8 @@ impl Attachments {
 
 #[derive(Debug)]
 pub enum ExchangeError {
+    ExchangeCompleted(Uuid),
+    MetadataReadError(Uuid, String),
     InputReadError(Uuid, String),
     InputTakeError(Uuid, String),
     OutputReadError(Uuid, String),
@@ -90,6 +66,15 @@ pub enum ExchangeError {
 }
 
 impl ExchangeError {
+
+    pub fn exchange_completed(uuid: &Uuid) -> Self {
+        ExchangeError::ExchangeCompleted(*uuid)
+    }
+
+    pub fn metadata_read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::MetadataReadError(*uuid, msg.into())
+    }
+
     pub fn input_read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
         ExchangeError::InputReadError(*uuid, msg.into())
     }
@@ -118,6 +103,12 @@ impl ExchangeError {
 impl Display for ExchangeError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            ExchangeError::ExchangeCompleted(uuid) => {
+                write!(f, "{} Exchange has already been completed", uuid)
+            }
+            ExchangeError::MetadataReadError(uuid, msg) => {
+                write!(f, "{} Failed to read metadata: {}", uuid, msg)
+            }
             ExchangeError::InputReadError(uuid, msg) => {
                 write!(f, "{} Failed to read input: {}", uuid, msg)
             }
@@ -187,69 +178,32 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::exchange::buffered::BufferedExchange;
+    use crate::exchange::Attachments;
 
     struct TestStruct;
 
     #[test]
     fn test_attachments() {
-        let mut exchange: BufferedExchange<(), (), ()> = BufferedExchange::new();
+        let mut attachments = Attachments::new();
         let key1 = "test_key1";
         let key2 = "test_key2";
         let key3 = "test_key3";
         let key4 = "test_key4";
         {
-            exchange.attachments_mut().add::<u64>(key1, 1);
-            exchange
-                .attachments_mut()
+            attachments.add::<u64>(key1, 1);
+            attachments
                 .add::<String>(key2, String::from("test"));
-            exchange.attachments_mut().add::<bool>(key3, true);
+            attachments.add::<bool>(key3, true);
             let test_struct = TestStruct;
-            exchange
-                .attachments_mut()
+            attachments
                 .add::<TestStruct>(key4, test_struct);
         }
 
         {
-            assert!(exchange.attachments().get::<u64>(key1).is_some());
-            assert!(exchange.attachments().get::<String>(key2).is_some());
-            assert!(exchange.attachments().get::<bool>(key3).is_some());
-            assert!(exchange.attachments().get::<TestStruct>(key4).is_some());
+            assert!(attachments.get::<u64>(key1).is_some());
+            assert!(attachments.get::<String>(key2).is_some());
+            assert!(attachments.get::<bool>(key3).is_some());
+            assert!(attachments.get::<TestStruct>(key4).is_some());
         }
-    }
-
-    #[test]
-    fn test_callbacks() {
-        let mut exchange: BufferedExchange<String, (), ()> = BufferedExchange::new();
-        exchange.save_input(String::from("hello"));
-        exchange.add_input_listener(|input, _| {
-            input.push_str(" world!");
-        });
-        exchange.add_input_listener(|input, _| {
-            input.push_str(" world!");
-        });
-        exchange.add_input_listener(|input, _| {
-            input.push_str(" world!");
-        });
-        let request = exchange.take_input().unwrap();
-        assert_eq!(request, "hello world! world! world!");
-    }
-
-    #[test]
-    fn test_consume() {
-        let mut exchange: BufferedExchange<String, (), ()> = BufferedExchange::new();
-
-        // consume before adding data
-        let invalid_consume = exchange.take_input();
-        assert!(invalid_consume.is_err());
-
-        // consume after adding data
-        exchange.save_input(String::from("hello"));
-        let request = exchange.take_input().unwrap();
-        assert_eq!(request, "hello");
-
-        // consume again
-        let invalid_consume = exchange.take_input();
-        assert!(invalid_consume.is_err());
     }
 }
