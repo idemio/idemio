@@ -1,13 +1,12 @@
-use crate::handler::{Handler, SharedBufferedHandler};
+use crate::handler::{Handler};
 use crate::handler::config::HandlerId;
-use crate::handler::registry::{HandlerRegistry, Registry};
+use crate::handler::registry::{HandlerRegistry};
 use fnv::{FnvBuildHasher, FnvHasher};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::iter::Filter;
-use std::marker::PhantomData;
 use std::str::{FromStr, Split};
 use std::sync::Arc;
 
@@ -323,8 +322,7 @@ mod test {
     use crate::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
     use async_trait::async_trait;
     use std::collections::HashMap;
-    use std::sync::Arc;
-    use crate::exchange::unified::Exchange;
+    use crate::exchange::Exchange;
 
     #[derive(Debug)]
     struct DummyHandler;

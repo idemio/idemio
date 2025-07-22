@@ -6,7 +6,7 @@ use idemio::router::route::{PathChain, PathConfig, PathRouter};
 use idemio::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
 use std::collections::HashMap;
 use std::hint::black_box;
-use idemio::exchange::unified::Exchange;
+use idemio::exchange::Exchange;
 use idemio::handler::config::HandlerId;
 // This is a simple benchmark to aid development of the router
 

@@ -114,8 +114,8 @@ where
         }
     }
 
-    pub fn id(&mut self, id: String) -> &mut Self {
-        self.config.id = id;
+    pub fn id(&mut self, id: impl Into<String>) -> &mut Self {
+        self.config.id = id.into();
         self
     }
 
@@ -139,7 +139,7 @@ where
         self
     }
 
-    pub fn inner_config(&mut self, config: Config<C>) -> &mut Self {
+    pub fn handler_config(&mut self, config: Config<C>) -> &mut Self {
         self.config.config = config;
         self
     }
