@@ -1,6 +1,6 @@
 pub mod factory;
 pub mod route;
-mod executor;
+pub mod executor;
 
 use crate::handler::config::{ChainId, HandlerId};
 use crate::handler::registry::HandlerRegistry;
@@ -12,7 +12,7 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use crate::exchange::unified::Exchange;
+use crate::exchange::Exchange;
 use crate::router::executor::HandlerExecutor;
 
 #[derive(Debug)]
@@ -124,7 +124,7 @@ where
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Exec: HandlerExecutor<Exchange<'a, In, Out, Meta>, In, Out, Meta> + Send + Sync,
+    Exec: HandlerExecutor<In, Out, Meta> + Send + Sync,
     Factory: ExchangeFactory<Req, In, Out, Meta, Exchange<'a, In, Out, Meta>>,
     Req: Send,
 {
@@ -140,7 +140,7 @@ where
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Exec: HandlerExecutor<Exchange<'a, In, Out, Meta>, In, Out, Meta> + Send + Sync,
+    Exec: HandlerExecutor<In, Out, Meta> + Send + Sync,
     Factory: ExchangeFactory<Req, In, Out, Meta, Exchange<'a, In, Out, Meta>>,
     Req: Send,
 {
@@ -192,7 +192,7 @@ where
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Exec: HandlerExecutor<Exchange<'a, In, Out, Meta>, In, Out, Meta> + Send + Sync,
+    Exec: HandlerExecutor<In, Out, Meta> + Send + Sync,
     Factory: ExchangeFactory<Req, In, Out, Meta, Exchange<'a, In, Out, Meta>>,
 {
     async fn route(&self, request: Req) -> Result<Out, RouterError> {

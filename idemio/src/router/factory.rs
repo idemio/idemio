@@ -20,14 +20,17 @@ where
 
 #[cfg(feature = "hyper")]
 pub mod hyper {
+    use futures_util::StreamExt;
+use std::error::Error;
     use async_trait::async_trait;
     use http_body_util::BodyExt;
     use hyper::Request;
-    use crate::exchange::unified::Exchange;
+    use crate::exchange::Exchange;
     use crate::router::RouterError;
     use crate::router::factory::ExchangeFactory;
     use hyper::body::{Bytes, Incoming};
     use hyper::http::request::Parts;
+    use crate::exchange::collector::hyper::BytesCollector;
 
     pub struct HyperExchangeFactory;
 
@@ -55,14 +58,27 @@ pub mod hyper {
         ) -> Result<Exchange<'a, Bytes, Bytes, Parts>, RouterError> {
             let mut exchange = Exchange::new();
             let (parts, body) = request.into_parts();
-            let collected = body.collect().await;
-            let body_bytes = collected
-                .map_err(|e| RouterError::ExchangeCreationFailed(e.to_string()))?
-                .to_bytes();
-            exchange.save_input(body_bytes);
+
+            // Create a stream from the hyper body
+            let body_stream = body
+                .into_data_stream()
+                .map(|chunk| {
+                    match chunk {
+                        Ok(data) => Ok(data),
+                        Err(e) => Err(Box::new(e) as Box<dyn Error + Send + Sync>)
+                    }
+                });
+
+            // Set the input stream with a BytesCollector
+            exchange.set_input_stream_with_collector(
+                Box::pin(body_stream),
+                Box::new(BytesCollector),
+            );
+
             exchange.set_metadata(parts);
             Ok(exchange)
         }
+
     }
 }
 

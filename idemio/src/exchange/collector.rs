@@ -1,65 +1,69 @@
-use std::error::Error;
-use std::pin::Pin;
 use futures_util::{Stream, StreamExt};
-use uuid::Uuid;
-use crate::exchange::ExchangeError;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
+use std::marker::PhantomData;
+use std::pin::Pin;
 
 #[cfg(feature = "hyper")]
-use hyper::body::Bytes;
+pub mod hyper {
+    use crate::exchange::collector::{CollectorError, StreamCollector};
+    use hyper::body::Bytes;
 
-#[cfg(feature = "hyper")]
-pub struct BytesCollector;
+    pub struct BytesCollector;
 
-#[cfg(feature = "hyper")]
-impl StreamCollector<Bytes> for BytesCollector {
-    fn collect(&self, items: Vec<Bytes>) -> Result<Bytes, ExchangeError> {
-        if items.is_empty() {
-            return Ok(Bytes::new());
+    impl StreamCollector<Bytes> for BytesCollector {
+        fn collect(&self, items: Vec<Bytes>) -> Result<Bytes, CollectorError> {
+            if items.is_empty() {
+                return Ok(Bytes::new());
+            }
+
+            let total_len = items.iter().map(|b| b.len()).sum();
+            let mut combined = Vec::with_capacity(total_len);
+
+            for chunk in items {
+                combined.extend_from_slice(&chunk);
+            }
+
+            Ok(Bytes::from(combined))
         }
-
-        let total_len = items.iter().map(|b| b.len()).sum();
-        let mut combined = Vec::with_capacity(total_len);
-
-        for chunk in items {
-            combined.extend_from_slice(&chunk);
-        }
-
-        Ok(Bytes::from(combined))
     }
 }
 
 pub struct StringCollector;
 
 impl StreamCollector<String> for StringCollector {
-    fn collect(&self, items: Vec<String>) -> Result<String, ExchangeError> {
-        Ok(items.join(""))
+    fn collect(&self, items: Vec<String>) -> Result<String, CollectorError> {
+        if items.is_empty() {
+            return Ok(String::new());
+        }
+        let total_len: usize = items.iter().map(|s| s.len()).sum();
+        let mut result = String::with_capacity(total_len);
+        for item in items {
+            result.push_str(&item);
+        }
+        Ok(result)
     }
 }
 
 pub struct VecCollector<T> {
-    _phantom: std::marker::PhantomData<T>,
+    phantom: PhantomData<T>,
 }
 
 impl<T> VecCollector<T> {
     pub fn new() -> Self {
         Self {
-            _phantom: std::marker::PhantomData,
+            phantom: PhantomData,
         }
-    }
-}
-
-impl<T> Default for VecCollector<T> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
 impl<T> StreamCollector<Vec<T>> for VecCollector<T>
 where
-    T: Send + Sync
+    T: Send + Sync,
 {
-    fn collect(&self, items: Vec<Vec<T>>) -> Result<Vec<T>, ExchangeError> {
-        let mut result = Vec::new();
+    fn collect(&self, items: Vec<Vec<T>>) -> Result<Vec<T>, CollectorError> {
+        let total_len: usize = items.iter().map(|v| v.len()).sum();
+        let mut result = Vec::with_capacity(total_len);
         for item in items {
             result.extend(item);
         }
@@ -69,10 +73,10 @@ where
 
 /// Trait for collecting stream items into a single value
 pub trait StreamCollector<T>: Send + Sync {
-    fn collect(&self, items: Vec<T>) -> Result<T, ExchangeError>;
+    fn collect(&self, items: Vec<T>) -> Result<T, CollectorError>;
 }
 
-pub enum StreamOrValue<'a, T> 
+pub enum StreamOrValue<'a, T>
 where
     T: Send + Sync,
 {
@@ -96,7 +100,7 @@ where
     /// Create from a stream without a collector
     pub fn from_stream<S>(stream: S) -> Self
     where
-        S: Stream<Item = Result<T, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a,
     {
         Self::Stream(Box::pin(stream), None)
     }
@@ -107,45 +111,50 @@ where
         collector: Box<dyn StreamCollector<T> + 'a>,
     ) -> Self
     where
-        S: Stream<Item = Result<T, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a,
     {
         Self::Stream(Box::pin(stream), Some(collector))
     }
 
     /// Get value by collecting stream if needed (requires collector for streams)
-    pub async fn get_value(&mut self) -> Result<&T, ExchangeError> {
+    pub async fn get_value(&mut self) -> Result<&T, CollectorError> {
         match self {
             StreamOrValue::Value(val) => Ok(val),
             StreamOrValue::Collected(val) => Ok(val),
             StreamOrValue::Stream(stream, collector) => {
-                let collector = collector.take().ok_or_else(|| {
-                    todo!("Handle stream error")
-                })?;
+                let collector = match collector.take() {
+                    None => {
+                        return Err(CollectorError::invalid_stream_error(
+                            "No collector present for stream.",
+                        ));
+                    }
+                    Some(collector) => collector,
+                };
 
                 let mut items = Vec::new();
                 while let Some(result) = stream.next().await {
                     match result {
                         Ok(item) => items.push(item),
-                        Err(e) => todo!("Handle stream error"),
+                        Err(e) => {
+                            return Err(CollectorError::stream_collect_error(format!(
+                                "Could not collect stream: {}",
+                                e
+                            )));
+                        }
                     }
                 }
                 let collected = collector.collect(items)?;
                 *self = StreamOrValue::Collected(collected);
-                if let StreamOrValue::Collected(val) = self {
-                    Ok(val)
-                } else {
-                    unreachable!()
+                match self {
+                    StreamOrValue::Collected(val) => Ok(val),
+                    _ => unreachable!(),
                 }
             }
         }
     }
 
     /// Get value by collecting stream with provided collector
-    pub async fn get_value_with_collector<C>(
-        &mut self,
-        collector: C,
-        uuid: &Uuid,
-    ) -> Result<&T, ExchangeError>
+    pub async fn get_value_with_collector<C>(&mut self, collector: C) -> Result<&T, CollectorError>
     where
         C: StreamCollector<T>,
     {
@@ -157,38 +166,42 @@ where
                 while let Some(result) = stream.next().await {
                     match result {
                         Ok(item) => items.push(item),
-                        Err(e) => return Err(ExchangeError::input_read_error(
-                            uuid,
-                            &format!("Stream error: {}", e)
-                        )),
+                        Err(e) => {
+                            let msg = format!("Could not collect stream: {}", e.to_string());
+                            return Err(CollectorError::stream_collect_error(msg));
+                        }
                     }
                 }
                 let collected = collector.collect(items)?;
                 *self = StreamOrValue::Collected(collected);
-                if let StreamOrValue::Collected(val) = self {
-                    Ok(val)
-                } else {
-                    unreachable!()
+                match self {
+                    StreamOrValue::Collected(val) => Ok(val),
+                    _ => unreachable!(),
                 }
             }
         }
     }
 
     /// Take value by collecting stream if needed (requires collector for streams)
-    pub async fn take_value(self) -> Result<T, ExchangeError> {
+    pub async fn take_value(self) -> Result<T, CollectorError> {
         match self {
             StreamOrValue::Value(val) => Ok(val),
             StreamOrValue::Collected(val) => Ok(val),
             StreamOrValue::Stream(mut stream, collector) => {
                 let collector = collector.ok_or_else(|| {
-                    todo!("Implement stream error handling")
+                    CollectorError::invalid_stream_error("No collector present for stream.")
                 })?;
 
                 let mut items = Vec::new();
                 while let Some(result) = stream.next().await {
                     match result {
                         Ok(item) => items.push(item),
-                        Err(e) => todo!("Handle stream error"),
+                        Err(e) => {
+                            return Err(CollectorError::stream_collect_error(format!(
+                                "Could not collect stream: {}",
+                                e.to_string()
+                            )));
+                        }
                     }
                 }
                 collector.collect(items)
@@ -196,11 +209,8 @@ where
         }
     }
 
-    /// Take value by collecting stream with provided collector
-    pub async fn take_value_with_collector<C>(
-        self,
-        collector: C
-    ) -> Result<T, ExchangeError>
+    /// Take value by consuming the stream and collecting it with the provided collector.
+    pub async fn take_value_with_collector<C>(self, collector: C) -> Result<T, CollectorError>
     where
         C: StreamCollector<T>,
     {
@@ -212,18 +222,60 @@ where
                 while let Some(result) = stream.next().await {
                     match result {
                         Ok(item) => items.push(item),
-                        Err(e) => todo!("Handle stream error"),
+                        Err(e) => {
+                            return Err(CollectorError::stream_collect_error(format!(
+                                "Could not collect stream: {}",
+                                e.to_string()
+                            )));
+                        }
                     }
                 }
                 collector.collect(items)
             }
         }
     }
-    
-    pub fn take_stream(self) -> Result<Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a>>, ExchangeError> {
+
+    /// Takes the stream without consuming it.
+    pub fn take_stream(
+        self,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a>>,
+        CollectorError,
+    > {
         match self {
             StreamOrValue::Stream(stream, _) => Ok(stream),
-            _ => todo!("Handle stream error"),
+            _ => Err(CollectorError::invalid_stream_error("No stream to take")),
         }
     }
 }
+
+#[derive(Debug)]
+pub enum CollectorError {
+    InvalidStreamError(String),
+    StreamCollectError(String),
+}
+
+impl CollectorError {
+    pub fn invalid_stream_error(msg: impl Into<String>) -> Self {
+        Self::InvalidStreamError(msg.into())
+    }
+
+    pub fn stream_collect_error(msg: impl Into<String>) -> Self {
+        Self::StreamCollectError(msg.into())
+    }
+}
+
+impl Display for CollectorError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CollectorError::InvalidStreamError(msg) => {
+                write!(f, "Invalid Stream Error: {}", msg)
+            }
+            CollectorError::StreamCollectError(msg) => {
+                write!(f, "Stream Collect Error: {}", msg)
+            }
+        }
+    }
+}
+
+impl Error for CollectorError {}
