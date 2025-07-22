@@ -1,11 +1,10 @@
-pub mod unified;
 pub mod collector;
 
+use crate::exchange::collector::CollectorError;
 use fnv::FnvHasher;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use crate::exchange::collector::CollectorError;
 
 use crate::exchange::collector::{StreamCollector, StreamOrValue};
 use futures_util::{Stream, StreamExt, pin_mut};
@@ -14,14 +13,16 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use uuid::Uuid;
 
+type StreamResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
 /// The main exchange struct representing the input and output flow for a single exchange.
-/// An exchange can be anything from an HTTP request/response to tcp/ip flows, 
+/// An exchange can be anything from an HTTP request/response to tcp/ip flows,
 /// it all depends on how the middleware is implemented.
 ///
-/// The exchange is a stateful object that can be used to store 
+/// The exchange is a stateful object that can be used to store
 /// data between the different stages of the exchange.
-/// Additionally, it can store streams on the request or response. 
-/// The stream will only be fully loaded in memory when required. 
+/// Additionally, it can store streams on the request or response.
+/// The stream will only be fully loaded in memory when required.
 /// You can proxy request streams without needing to consume it.
 ///
 /// Example flows:
@@ -232,7 +233,7 @@ where
     // Input operations - streaming
     pub fn set_input_stream<S>(&mut self, stream: S)
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
     {
         self.input = Some(StreamOrValue::from_stream(stream));
     }
@@ -242,7 +243,7 @@ where
         stream: S,
         collector: Box<dyn StreamCollector<I> + 'a>,
     ) where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
     {
         self.input = Some(StreamOrValue::from_stream_with_collector(stream, collector));
     }
@@ -253,7 +254,7 @@ where
         processor: F,
     ) -> Result<(), ExchangeError>
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
         F: FnOnce(Vec<I>) -> Result<I, ExchangeError>,
     {
         let mut items = Vec::new();
@@ -282,7 +283,7 @@ where
         collector: C,
     ) -> Result<(), ExchangeError>
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
         C: StreamCollector<I>,
     {
         let uuid = self.uuid.clone();
@@ -291,7 +292,7 @@ where
                 .collect(items)
                 .map_err(|e| ExchangeError::exchange_collector_error(&uuid, e))
         })
-            .await
+        .await
     }
 
     // Get input (collects stream if needed and collector is available)
@@ -371,12 +372,7 @@ where
     // Take input stream for proxying
     pub fn take_input_stream(
         &mut self,
-    ) -> Result<
-        Pin<
-            Box<dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>,
-        >,
-        ExchangeError,
-    > {
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResult<I>> + Send + 'a>>, ExchangeError> {
         match self.input.take() {
             Some(stream_or_value) => stream_or_value
                 .take_stream()
@@ -400,7 +396,7 @@ where
     // Output operations - streaming
     pub fn set_output_stream<S>(&mut self, stream: S)
     where
-        S: Stream<Item = Result<O, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<O>> + Send + 'a,
     {
         self.output = Some(StreamOrValue::from_stream(stream));
     }
@@ -410,7 +406,7 @@ where
         stream: S,
         collector: Box<dyn StreamCollector<O> + 'a>,
     ) where
-        S: Stream<Item = Result<O, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<O>> + Send + 'a,
     {
         self.output = Some(StreamOrValue::from_stream_with_collector(stream, collector));
     }
@@ -421,7 +417,7 @@ where
         processor: F,
     ) -> Result<(), ExchangeError>
     where
-        S: Stream<Item = Result<O, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<O>> + Send + 'a,
         F: FnOnce(Vec<O>) -> Result<O, ExchangeError>,
     {
         let mut items = Vec::new();
@@ -450,7 +446,7 @@ where
         collector: C,
     ) -> Result<(), ExchangeError>
     where
-        S: Stream<Item = Result<O, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<O>> + Send + 'a,
         C: StreamCollector<O>,
     {
         let uuid = self.uuid.clone();
@@ -459,16 +455,18 @@ where
                 .collect(items)
                 .map_err(|e| ExchangeError::exchange_collector_error(&uuid, e))
         })
-            .await
+        .await
     }
 
     // Get output (collects stream if needed and collector is available)
     pub async fn output(&mut self) -> Result<&O, ExchangeError> {
         match &mut self.output {
+            
             Some(stream_or_value) => stream_or_value
                 .get_value()
                 .await
                 .map_err(|e| ExchangeError::exchange_collector_error(&self.uuid, e)),
+            
             None => Err(ExchangeError::output_read_error(
                 &self.uuid,
                 "No output available",
@@ -542,7 +540,7 @@ where
         &mut self,
     ) -> Result<
         Pin<
-            Box<dyn Stream<Item = Result<O, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>,
+            Box<dyn Stream<Item = StreamResult<O>> + Send + 'a>,
         >,
         ExchangeError,
     > {
@@ -764,12 +762,11 @@ where
             .build()
     }
 
-
     pub fn streaming_request_buffered_response<S>(
         input_stream: S,
     ) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
     {
         Self::new()
             .with_streaming_input(input_stream)
@@ -782,14 +779,13 @@ where
         input_collector: Box<dyn StreamCollector<I> + 'a>,
     ) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
     {
         Self::new()
             .with_streaming_input_and_collector(input_stream, input_collector)
             .with_buffered_output()
             .build()
     }
-
 
     pub fn buffered_request_streaming_response<S>(
         input: I,
@@ -811,7 +807,7 @@ where
 
     pub fn streaming<S>(input_stream: S) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
     {
         Self::new()
             .with_streaming_input(input_stream)
@@ -824,7 +820,7 @@ where
         input_collector: Box<dyn StreamCollector<I> + 'a>,
     ) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + 'a,
     {
         Self::new()
             .with_streaming_input_and_collector(input_stream, input_collector)
@@ -832,9 +828,6 @@ where
             .build()
     }
 }
-
-
-
 
 pub struct Attachments {
     attachments: HashMap<AttachmentKey, Box<dyn Any + Send + Sync>, fnv::FnvBuildHasher>,
@@ -895,9 +888,8 @@ pub enum ExchangeError {
 }
 
 impl ExchangeError {
-    
     pub fn exchange_collector_error(uuid: &Uuid, err: CollectorError) -> Self {
-        ExchangeError::ExchangeCollectorError(*uuid, err)   
+        ExchangeError::ExchangeCollectorError(*uuid, err)
     }
 
     pub fn exchange_completed(uuid: &Uuid) -> Self {
@@ -1015,9 +1007,9 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::exchange::Attachments;
     use futures_util::stream;
     use hyper::body::Bytes;
-    use crate::exchange::Attachments;
 
     struct TestStruct;
 
@@ -1030,12 +1022,10 @@ mod test {
         let key4 = "test_key4";
         {
             attachments.add::<u64>(key1, 1);
-            attachments
-                .add::<String>(key2, String::from("test"));
+            attachments.add::<String>(key2, String::from("test"));
             attachments.add::<bool>(key3, true);
             let test_struct = TestStruct;
-            attachments
-                .add::<TestStruct>(key4, test_struct);
+            attachments.add::<TestStruct>(key4, test_struct);
         }
 
         {
@@ -1045,8 +1035,6 @@ mod test {
             assert!(attachments.get::<TestStruct>(key4).is_some());
         }
     }
-
-
 
     #[tokio::test]
     async fn test_unified_exchange_buffered() {

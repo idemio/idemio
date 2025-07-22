@@ -63,15 +63,38 @@ pub struct PathChain {
     pub response_handlers: Vec<String>,
 }
 
-pub struct LoadedChain<Input, Output, Metadata> 
+impl PathChain {
+    pub fn new() -> Self {
+        Self {
+            request_handlers: vec![],
+            termination_handler: "".to_string(),
+            response_handlers: vec![],
+        }
+    }
+
+    pub fn add_request_handler(&mut self, handler: impl Into<String>) -> &mut Self {
+        self.request_handlers.push(handler.into());
+        self
+    }
+    pub fn add_termination_handler(&mut self, handler: impl Into<String>) -> &mut Self {
+        self.termination_handler = handler.into();
+        self
+    }
+    pub fn add_response_handler(&mut self, handler: impl Into<String>) -> &mut Self {
+        self.response_handlers.push(handler.into());
+        self
+    }
+}
+
+pub struct LoadedChain<In, Out, Meta>
 where
-    Input: Send + Sync,
-    Output: Send + Sync,
-    Metadata: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
 {
-    pub request_handlers: Vec<Arc<dyn Handler<Input, Output, Metadata>>>,
-    pub termination_handler: Arc<dyn Handler<Input, Output, Metadata>>,
-    pub response_handlers: Vec<Arc<dyn Handler<Input, Output, Metadata>>>,
+    pub request_handlers: Vec<Arc<dyn Handler<In, Out, Meta>>>,
+    pub termination_handler: Arc<dyn Handler<In, Out, Meta>>,
+    pub response_handlers: Vec<Arc<dyn Handler<In, Out, Meta>>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -127,22 +150,22 @@ impl PathKey {
     }
 }
 
-struct PathNode<Input, Output, Metadata> 
+struct PathNode<In, Out, Meta>
 where
-    Input: Send + Sync,
-    Output: Send + Sync,
-    Metadata: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
 {
-    children: HashMap<PathSegment, PathNode<Input, Output, Metadata>, FnvBuildHasher>,
+    children: HashMap<PathSegment, PathNode<In, Out, Meta>, FnvBuildHasher>,
     segment_depth: u64,
-    methods: HashMap<String, Arc<LoadedChain<Input, Output, Metadata>>, FnvBuildHasher>,
+    methods: HashMap<String, Arc<LoadedChain<In, Out, Meta>>, FnvBuildHasher>,
 }
 
-impl<Input, Output, Metadata> Default for PathNode<Input, Output, Metadata> 
+impl<In, Out, Meta> Default for PathNode<In, Out, Meta>
 where
-    Input: Send + Sync,
-    Output: Send + Sync,
-    Metadata: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
 {
     fn default() -> Self {
         Self {
@@ -153,25 +176,25 @@ where
     }
 }
 
-pub struct PathRouter<Input, Output, Metadata> 
+pub struct PathRouter<In, Out, Meta>
 where
-    Input: Send + Sync,
-    Output: Send + Sync,
-    Metadata: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
 {
-    static_paths: HashMap<PathKey, Arc<LoadedChain<Input, Output, Metadata>>, FnvBuildHasher>,
-    nodes: PathNode<Input, Output, Metadata>,
+    static_paths: HashMap<PathKey, Arc<LoadedChain<In, Out, Meta>>, FnvBuildHasher>,
+    nodes: PathNode<In, Out, Meta>,
 }
 
-impl<Input, Output, Metadata> PathRouter<Input, Output, Metadata>
+impl<In, Out, Meta> PathRouter<In, Out, Meta>
 where
-    Input: Send + Sync,
-    Output: Send + Sync,
-    Metadata: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
 {
     pub fn new(
         route_config: &PathConfig,
-        registry: &HandlerRegistry<Input, Output, Metadata>,
+        registry: &HandlerRegistry<In, Out, Meta>,
     ) -> Result<Self, PathRouterError>
     {
         let mut table = Self {
@@ -186,8 +209,8 @@ where
 
     fn find_in_registry(
         handler: &str,
-        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
-    ) -> Result<Arc<dyn Handler<Input, Output, Metadata>>, PathRouterError> {
+        handler_registry: &HandlerRegistry<In, Out, Meta>,
+    ) -> Result<Arc<dyn Handler<In, Out, Meta>>, PathRouterError> {
         let handler_id = HandlerId::new(handler);
         match handler_registry.find_with_id(&handler_id) {
             Ok(handler) => Ok(handler),
@@ -197,8 +220,8 @@ where
 
     fn find_all_in_registry(
         handlers: &[String],
-        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
-    ) -> Result<Vec<Arc<dyn Handler<Input, Output, Metadata>>>, PathRouterError> {
+        handler_registry: &HandlerRegistry<In, Out, Meta>,
+    ) -> Result<Vec<Arc<dyn Handler<In, Out, Meta>>>, PathRouterError> {
         let mut registered_handlers = vec![];
         for handler in handlers {
             let registered_handler = Self::find_in_registry(handler, handler_registry)?;
@@ -208,9 +231,9 @@ where
     }
 
     fn load_handlers(
-        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
+        handler_registry: &HandlerRegistry<In, Out, Meta>,
         path_chain: &PathChain,
-    ) -> Result<LoadedChain<Input, Output, Metadata>, PathRouterError> {
+    ) -> Result<LoadedChain<In, Out, Meta>, PathRouterError> {
         let registered_request_handlers =
             Self::find_all_in_registry(&path_chain.request_handlers, handler_registry)?;
         let registered_termination_handler =
@@ -227,7 +250,7 @@ where
     fn parse_config(
         &mut self,
         route_config: &PathConfig,
-        handler_registry: &HandlerRegistry<Input, Output, Metadata>,
+        handler_registry: &HandlerRegistry<In, Out, Meta>,
     ) -> Result<(), PathRouterError> {
         for (path, methods) in route_config.paths.iter() {
             // static paths (ones that do not contain '*') should be added to the fast path.
@@ -274,14 +297,14 @@ where
         path.split('/').filter(|s| !s.is_empty())
     }
 
-    pub fn lookup(&self, request_path: &str, request_method: &str) -> Option<Arc<LoadedChain<Input, Output, Metadata>>> {
+    pub fn lookup(&self, request_path: &str, request_method: &str) -> Option<Arc<LoadedChain<In, Out, Meta>>> {
 
         if let Some(handlers) = self.static_paths.get(&PathKey::new(request_method, request_path)) {
             return Some(handlers.clone());
         }
 
         let req_path_segments = Self::split_path(request_path);
-        let mut best_match: Option<&PathNode<Input, Output, Metadata>> = None;
+        let mut best_match: Option<&PathNode<In, Out, Meta>> = None;
         let mut max_depth = 0;
         let mut current_node = &self.nodes;
 

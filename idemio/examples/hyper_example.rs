@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
@@ -19,10 +18,10 @@ use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
 use idemio::exchange::Exchange;
 use idemio::handler::Handler;
 use idemio::handler::config::HandlerId;
-use idemio::router::{IdemioRouter, Router};
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::route::{PathConfig, PathChain};
+use idemio::router::route::{PathChain, PathConfig};
+use idemio::router::{IdemioRouter, Router, RouterError};
 use idemio::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
 use tokio::net::TcpListener;
 
@@ -131,9 +130,10 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
     }
 }
 
+// TODO - Make PathRouter easier to configure and use.
 // Create a router with appropriate handlers and routes using the corrected PathRouter structure
 fn create_router<'a>()
-    -> IdemioRouter<'a, Request<Incoming>, Bytes, Bytes, Parts, HyperExchangeFactory, DefaultExecutor> {
+-> IdemioRouter<'a, Request<Incoming>, Bytes, Bytes, Parts, HyperExchangeFactory, DefaultExecutor> {
     let mut handler_registry = idemio::handler::registry::HandlerRegistry::new();
 
     // Register greeting handler
@@ -144,7 +144,7 @@ fn create_router<'a>()
             response_text: "Hello, World!".to_string(),
         },
     })
-        .unwrap();
+    .unwrap();
     handler_config
         .id(greeting_handler_id.to_string())
         .handler_config(inner_config)
@@ -163,7 +163,7 @@ fn create_router<'a>()
     let inner_config = Config::new(ProgrammaticConfigProvider {
         config: EchoHandlerConfig { reverse: false },
     })
-        .unwrap();
+    .unwrap();
     handler_config
         .id(echo_handler_id.to_string())
         .handler_config(inner_config)
@@ -182,12 +182,12 @@ fn create_router<'a>()
     let inner_config = Config::new(ProgrammaticConfigProvider {
         config: IdempotentLoggingHandlerConfig {},
     })
-        .unwrap();
+    .unwrap();
     handler_config
         .id(idempotent_logging_handler_id.to_string())
         .handler_config(inner_config)
         .enabled(true);
-    
+
     let handler = IdempotentLoggingHandler;
     handler_registry
         .register_handler(&idempotent_logging_handler_id, handler)
@@ -198,31 +198,28 @@ fn create_router<'a>()
 
     // Configure echo endpoint with POST method
     let mut echo_methods = HashMap::new();
-    let echo_chain = PathChain {
-        request_handlers: vec!["idempotent_logging_handler".to_string()],
-        termination_handler: "echo_handler".to_string(),
-        response_handlers: vec![],
-    };
+    let mut echo_chain = PathChain::new();
+    echo_chain
+        .add_request_handler("idempotent_logging_handler")
+        .add_termination_handler("echo_handler");
     echo_methods.insert("POST".to_string(), echo_chain);
     paths.insert("/echo".to_string(), echo_methods);
 
     // Configure greeting endpoint with GET method
     let mut greet_methods = HashMap::new();
-    let greet_chain = PathChain {
-        request_handlers: vec!["idempotent_logging_handler".to_string()],
-        termination_handler: "greeting_handler".to_string(),
-        response_handlers: vec![],
-    };
+    let mut greet_chain = PathChain::new();
+    greet_chain
+        .add_request_handler("idempotent_logging_handler")
+        .add_termination_handler("greeting_handler");
     greet_methods.insert("GET".to_string(), greet_chain);
     paths.insert("/greet".to_string(), greet_methods);
 
     // Add wildcard route for demonstration
     let mut wildcard_methods = HashMap::new();
-    let wildcard_chain = PathChain {
-        request_handlers: vec!["idempotent_logging_handler".to_string()],
-        termination_handler: "greeting_handler".to_string(),
-        response_handlers: vec![],
-    };
+    let mut wildcard_chain = PathChain::new();
+    wildcard_chain
+        .add_request_handler("idempotent_logging_handler")
+        .add_termination_handler("greeting_handler");
     wildcard_methods.insert("GET".to_string(), wildcard_chain);
     paths.insert("/api/*".to_string(), wildcard_methods);
 
@@ -233,12 +230,27 @@ fn create_router<'a>()
     };
 
     // Create the router
-    IdemioRouter::new(&handler_registry, &router_config, HyperExchangeFactory, DefaultExecutor)
+    IdemioRouter::new(
+        &handler_registry,
+        &router_config,
+        HyperExchangeFactory,
+        DefaultExecutor,
+    )
 }
 
 async fn handle_request(
     req: Request<Incoming>,
-    router: Arc<IdemioRouter<'_, Request<Incoming>, Bytes, Bytes, Parts, HyperExchangeFactory, DefaultExecutor>>,
+    router: Arc<
+        IdemioRouter<
+            '_,
+            Request<Incoming>,
+            Bytes,
+            Bytes,
+            Parts,
+            HyperExchangeFactory,
+            DefaultExecutor,
+        >,
+    >,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, Box<dyn std::error::Error + Send + Sync>> {
     // Extract the path for logging
     let path = req.uri().path().to_string();
@@ -260,10 +272,9 @@ async fn handle_request(
             // Handle routing errors
             println!("Error handling request: {}", e);
             let (status_code, error_message) = match e {
-                idemio::router::RouterError::RouteNotFound => (404, "Route not found"),
-                idemio::router::RouterError::MethodNotSupported => (405, "Method not allowed"),
-                idemio::router::RouterError::ExchangeCreationFailed(_) => (400, "Bad request"),
-                idemio::router::RouterError::ExecutionFailed(_) => (500, "Internal server error"),
+                RouterError::RouteNotFound => (404, "Route not found"),
+                RouterError::MethodNotSupported => (405, "Method not allowed"),
+                RouterError::ExchangeCreationFailed(_) => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
 
@@ -288,7 +299,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Bind to the port and listen for incoming TCP connections
     let listener = TcpListener::bind(addr).await?;
 
-    println!("🚀 Idemio Server running on http://{}", addr);
+    println!("Idemio Server running on http://{}", addr);
     println!("Available endpoints:");
     println!("  GET  /greet           - Returns a greeting message");
     println!("  POST /echo            - Echoes back the request body");
