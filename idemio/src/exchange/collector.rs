@@ -9,29 +9,50 @@ pub mod hyper {
     use crate::exchange::collector::{CollectorError, StreamCollector};
     use hyper::body::Bytes;
 
+    /// A collector that combines multiple `Bytes` chunks into a single `Bytes` instance.
     pub struct BytesCollector;
 
     impl StreamCollector<Bytes> for BytesCollector {
+        /// Collects a vector of `Bytes` chunks into a single `Bytes` instance.
+        ///
+        /// # Parameters
+        /// - `items`: A vector of `Bytes` chunks to be combined
+        ///
+        /// # Returns
+        /// Returns `Ok(Bytes)` containing all input bytes concatenated, or `Err(CollectorError)` if collection fails.
+        ///
+        /// # Behavior
+        /// If the input vector is empty, returns an empty `Bytes` instance. Otherwise, calculates the total
+        /// length and pre-allocates a vector with that capacity for efficient concatenation.
         fn collect(&self, items: Vec<Bytes>) -> Result<Bytes, CollectorError> {
             if items.is_empty() {
                 return Ok(Bytes::new());
             }
-
             let total_len = items.iter().map(|b| b.len()).sum();
             let mut combined = Vec::with_capacity(total_len);
-
             for chunk in items {
                 combined.extend_from_slice(&chunk);
             }
-
             Ok(Bytes::from(combined))
         }
     }
 }
 
+/// A collector that concatenates multiple strings into a single string.
 pub struct StringCollector;
 
 impl StreamCollector<String> for StringCollector {
+    /// Collects a vector of strings into a single concatenated string.
+    ///
+    /// # Parameters
+    /// - `items`: A vector of strings to be concatenated
+    ///
+    /// # Returns
+    /// Returns `Ok(String)` containing all input strings concatenated, or `Err(CollectorError)` if collection fails.
+    ///
+    /// # Behavior
+    /// If the input vector is empty, returns an empty string. Otherwise, calculates the total
+    /// length and pre-allocates a string with that capacity for efficient concatenation.
     fn collect(&self, items: Vec<String>) -> Result<String, CollectorError> {
         if items.is_empty() {
             return Ok(String::new());
@@ -45,11 +66,13 @@ impl StreamCollector<String> for StringCollector {
     }
 }
 
+/// A collector that flattens multiple vectors into a single vector.
 pub struct VecCollector<T> {
     phantom: PhantomData<T>,
 }
 
 impl<T> VecCollector<T> {
+    /// Creates a new `VecCollector` instance.
     pub fn new() -> Self {
         Self {
             phantom: PhantomData,
@@ -61,6 +84,17 @@ impl<T> StreamCollector<Vec<T>> for VecCollector<T>
 where
     T: Send + Sync,
 {
+    /// Collects multiple vectors into a single flattened vector.
+    ///
+    /// # Parameters
+    /// - `items`: A vector of vectors to be flattened
+    ///
+    /// # Returns
+    /// Returns `Ok(Vec<T>)` containing all elements from input vectors, or `Err(CollectorError)` if collection fails.
+    ///
+    /// # Behavior
+    /// Calculates the total length of all input vectors and pre-allocates a result vector
+    /// with that capacity for efficient flattening.
     fn collect(&self, items: Vec<Vec<T>>) -> Result<Vec<T>, CollectorError> {
         let total_len: usize = items.iter().map(|v| v.len()).sum();
         let mut result = Vec::with_capacity(total_len);
@@ -71,20 +105,37 @@ where
     }
 }
 
-/// Trait for collecting stream items into a single value
+/// Trait for collecting stream items into a single value.
+///
+/// This trait defines the interface for collectors that can combine multiple items
+/// of type `T` into a single item of the same type.
 pub trait StreamCollector<T>: Send + Sync {
+    /// Collects a vector of items into a single item.
+    ///
+    /// # Parameters
+    /// - `items`: A vector of items to be collected/combined
+    ///
+    /// # Returns
+    /// Returns `Ok(T)` containing the collected result, or `Err(CollectorError)` if collection fails.
     fn collect(&self, items: Vec<T>) -> Result<T, CollectorError>;
 }
 
+/// An enum that can hold either a direct value, a stream of values, or a collected value.
+///
+/// This type allows for flexible handling of data that might be immediately available
+/// as a value or streamed asynchronously.
 pub enum StreamOrValue<'a, T>
 where
     T: Send + Sync,
 {
+    /// A direct value that's immediately available.
     Value(T),
+    /// A stream of values with an optional collector for combining them.
     Stream(
         Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a>>,
         Option<Box<dyn StreamCollector<T> + 'a>>,
     ),
+    /// A value that has been collected from a stream.
     Collected(T),
 }
 
@@ -92,12 +143,45 @@ impl<'a, T> StreamOrValue<'a, T>
 where
     T: Send + Sync,
 {
-    /// Create from a single value
+    /// Creates a `StreamOrValue` from a direct value.
+    ///
+    /// # Parameters
+    /// - `value`: The value to wrap
+    ///
+    /// # Returns
+    /// Returns a `StreamOrValue::Value` containing the provided value.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use idemio::exchange::collector::StreamOrValue;
+    /// let stream_or_value = StreamOrValue::from_value("hello".to_string());
+    /// ```
+    ///
+    /// # Behavior
+    /// This creates a variant that contains an immediately available value.
     pub fn from_value(value: T) -> Self {
         Self::Value(value)
     }
 
-    /// Create from a stream without a collector
+    /// Creates a `StreamOrValue` from a stream without a collector.
+    ///
+    /// # Parameters
+    /// - `stream`: A stream that yields `Result<T, Box<dyn Error + Send + Sync>>`
+    ///
+    /// # Returns
+    /// Returns a `StreamOrValue::Stream` containing the provided stream.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use futures_util::stream;
+    /// use idemio::exchange::collector::StreamOrValue;
+    ///
+    /// let data_stream = stream::iter(vec![Ok("chunk1".to_string()), Ok("chunk2".to_string())]);
+    /// let stream_or_value = StreamOrValue::from_stream(data_stream);
+    /// ```
+    ///
+    /// # Behavior
+    /// The stream will need a collector to be provided later when collecting values.
     pub fn from_stream<S>(stream: S) -> Self
     where
         S: Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a,
@@ -105,7 +189,29 @@ where
         Self::Stream(Box::pin(stream), None)
     }
 
-    /// Create from a stream with a collector
+    /// Creates a `StreamOrValue` from a stream with a pre-configured collector.
+    ///
+    /// # Parameters
+    /// - `stream`: A stream that yields `Result<T, Box<dyn Error + Send + Sync>>`
+    /// - `collector`: A boxed collector for combining stream items
+    ///
+    /// # Returns
+    /// Returns a `StreamOrValue::Stream` containing the provided stream and collector.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use futures_util::stream;
+    /// use idemio::exchange::collector::{StreamOrValue, StringCollector};
+    ///
+    /// async {
+    ///     let data_stream = stream::iter(vec![Ok("chunk1".to_string()), Ok("chunk2".to_string())]);
+    ///     let collector = Box::new(StringCollector);
+    ///     let stream_or_value = StreamOrValue::from_stream_with_collector(data_stream, collector);
+    /// }
+    /// ```
+    ///
+    /// # Behavior
+    /// The stream can be immediately collected using the provided collector.
     pub fn from_stream_with_collector<S>(
         stream: S,
         collector: Box<dyn StreamCollector<T> + 'a>,
@@ -116,7 +222,28 @@ where
         Self::Stream(Box::pin(stream), Some(collector))
     }
 
-    /// Get value by collecting stream if needed (requires collector for streams)
+    /// Gets a reference to the value, collecting from stream if needed.
+    ///
+    /// # Returns
+    /// Returns `Ok(&T)` containing a reference to the value, or `Err(CollectorError)` if
+    /// collection fails or no collector is available for a stream.
+    ///
+    /// # Examples
+    /// ```rust
+    ///
+    /// use idemio::exchange::collector::StreamOrValue;
+    /// async {
+    ///     let mut stream_or_value = StreamOrValue::from_value("hello".to_string());
+    ///     let value_ref = stream_or_value.get_value().await?;
+    ///     println!("{}", value_ref);
+    /// }
+    /// ```
+    ///
+    /// # Behavior
+    /// - For `Value` and `Collected` variants, returns the contained value immediately
+    /// - For `Stream` variant, requires a collector to be present, consumes the stream,
+    ///   and converts to `Collected` variant
+    /// - May panic if called on a stream without a collector
     pub async fn get_value(&mut self) -> Result<&T, CollectorError> {
         match self {
             StreamOrValue::Value(val) => Ok(val),
@@ -130,7 +257,6 @@ where
                     }
                     Some(collector) => collector,
                 };
-
                 let mut items = Vec::new();
                 while let Some(result) = stream.next().await {
                     match result {
@@ -153,7 +279,31 @@ where
         }
     }
 
-    /// Get value by collecting stream with provided collector
+    /// Gets a reference to the value using a provided collector.
+    ///
+    /// # Parameters
+    /// - `collector`: A collector implementing `StreamCollector<T>` for combining stream items
+    ///
+    /// # Returns
+    /// Returns `Ok(&T)` containing a reference to the value, or `Err(CollectorError)` if collection fails.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use futures_util::stream;
+    /// use idemio::exchange::collector::{StreamOrValue, StringCollector};
+    ///
+    /// async {
+    ///     let data_stream = stream::iter(vec![Ok("chunk1".to_string()), Ok("chunk2".to_string())]);
+    ///     let mut stream_or_value = StreamOrValue::from_stream(data_stream);
+    ///     let collector = StringCollector;
+    ///     let value_ref = stream_or_value.get_value_with_collector(collector).await?;
+    /// }
+    /// ```
+    ///
+    /// # Behavior
+    /// - For `Value` and `Collected` variants, returns the contained value immediately
+    /// - For `Stream` variant, uses the provided collector to collect stream items
+    ///   and converts to `Collected` variant
     pub async fn get_value_with_collector<C>(&mut self, collector: C) -> Result<&T, CollectorError>
     where
         C: StreamCollector<T>,
@@ -182,7 +332,27 @@ where
         }
     }
 
-    /// Take value by collecting stream if needed (requires collector for streams)
+    /// Takes ownership of the value, collecting from stream if needed.
+    ///
+    /// # Returns
+    /// Returns `Ok(T)` containing the owned value, or `Err(CollectorError)` if
+    /// collection fails or no collector is available for a stream.
+    ///
+    /// # Examples
+    /// ```rust
+    ///
+    /// use idemio::exchange::collector::StreamOrValue;
+    /// async {
+    ///     let stream_or_value = StreamOrValue::from_value("hello".to_string());
+    ///     let owned_value = stream_or_value.take_value().await?;
+    ///     println!("{}", owned_value);
+    /// }
+    /// ```
+    ///
+    /// # Behavior
+    /// - Consumes the `StreamOrValue` instance
+    /// - For `Value` and `Collected` variants, returns the contained value
+    /// - For `Stream` variant, requires a collector to be present and collects all stream items
     pub async fn take_value(self) -> Result<T, CollectorError> {
         match self {
             StreamOrValue::Value(val) => Ok(val),
@@ -191,7 +361,6 @@ where
                 let collector = collector.ok_or_else(|| {
                     CollectorError::invalid_stream_error("No collector present for stream.")
                 })?;
-
                 let mut items = Vec::new();
                 while let Some(result) = stream.next().await {
                     match result {
@@ -209,7 +378,30 @@ where
         }
     }
 
-    /// Take value by consuming the stream and collecting it with the provided collector.
+    /// Takes ownership of the value using a provided collector.
+    ///
+    /// # Parameters
+    /// - `collector`: A collector implementing `StreamCollector<T>` for combining stream items
+    ///
+    /// # Returns
+    /// Returns `Ok(T)` containing the owned value, or `Err(CollectorError)` if collection fails.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use futures_util::stream;
+    /// use idemio::exchange::collector::{StreamOrValue, StringCollector};
+    /// async {
+    ///     let data_stream = stream::iter(vec![Ok("chunk1".to_string()), Ok("chunk2".to_string())]);
+    ///     let stream_or_value = StreamOrValue::from_stream(data_stream);
+    ///     let collector = StringCollector;
+    ///     let owned_value = stream_or_value.take_value_with_collector(collector).await?;
+    /// }
+    /// ```
+    ///
+    /// # Behavior
+    /// - Consumes the `StreamOrValue` instance
+    /// - For `Value` and `Collected` variants, returns the contained value
+    /// - For `Stream` variant, uses the provided collector to collect all stream items
     pub async fn take_value_with_collector<C>(self, collector: C) -> Result<T, CollectorError>
     where
         C: StreamCollector<T>,
@@ -235,7 +427,26 @@ where
         }
     }
 
-    /// Takes the stream without consuming it.
+    /// Extracts the underlying stream if present.
+    ///
+    /// # Returns
+    /// Returns `Ok(Pin<Box<dyn Stream<...>>>)` containing the stream, or `Err(CollectorError)`
+    /// if this instance doesn't contain a stream.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use futures_util::stream;
+    /// use idemio::exchange::collector::StreamOrValue;
+    ///
+    /// let data_stream = stream::iter(vec![Ok("chunk1".to_string()), Ok("chunk2".to_string())]);
+    /// let stream_or_value = StreamOrValue::from_stream(data_stream);
+    /// let extracted_stream = stream_or_value.take_stream()?;
+    /// ```
+    ///
+    /// # Behavior
+    /// - Consumes the `StreamOrValue` instance
+    /// - Only succeeds for `Stream` variant
+    /// - Returns an error for `Value` and `Collected` variants
     pub fn take_stream(
         self,
     ) -> Result<
@@ -249,17 +460,25 @@ where
     }
 }
 
+/// Error type for stream collection operations.
+///
+/// This enum represents various error conditions that can occur during
+/// stream collection and processing.
 #[derive(Debug)]
 pub enum CollectorError {
+    /// Error indicating an invalid stream operation or state.
     InvalidStreamError(String),
+    /// Error that occurred during stream collection.
     StreamCollectError(String),
 }
 
 impl CollectorError {
+    /// Creates a new `InvalidStreamError` with the provided message.
     pub fn invalid_stream_error(msg: impl Into<String>) -> Self {
         Self::InvalidStreamError(msg.into())
     }
 
+    /// Creates a new `StreamCollectError` with the provided message.
     pub fn stream_collect_error(msg: impl Into<String>) -> Self {
         Self::StreamCollectError(msg.into())
     }
