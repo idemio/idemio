@@ -17,12 +17,12 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
 use idemio::exchange::Exchange;
 use idemio::handler::Handler;
-use idemio::handler::config::HandlerId;
+use idemio::handler::HandlerId;
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
 use idemio::router::route::{PathChain, PathConfig};
-use idemio::router::{IdemioRouter, Router, RouterError};
-use idemio::status::{ExchangeState, HandlerExecutionError, HandlerStatus};
+use idemio::router::{RequestRouter, Router, RouterError};
+use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -36,7 +36,7 @@ impl Handler<Bytes, Bytes, Parts> for IdempotentLoggingHandler {
     async fn exec<'a>(
         &self,
         _exchange: &mut Exchange<'a, Bytes, Bytes, Parts>,
-    ) -> Result<HandlerStatus, HandlerExecutionError> {
+    ) -> Result<HandlerStatus, Infallible> {
         println!("Processing request with idempotent logging handler");
         Ok(HandlerStatus::new(ExchangeState::OK))
     }
@@ -61,13 +61,14 @@ impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
     async fn exec<'a>(
         &self,
         exchange: &mut Exchange<'a, Bytes, Bytes, Parts>,
-    ) -> Result<HandlerStatus, HandlerExecutionError> {
-        let input = exchange
-            .take_input()
-            .await
-            .map_err(|e| HandlerExecutionError {
-                message: format!("Failed to get input: {}", e).into(),
-            })?;
+    ) -> Result<HandlerStatus, Infallible> {
+        let input = match exchange.take_input().await {
+            Ok(input) => input,
+            Err(e) => {
+                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                    .message(format!("Could not consume input from exchange: {}", e)));
+            }
+        };
         let input_str = String::from_utf8_lossy(&input).to_string();
         let response_text = &self.config.config().get().response_text;
         let response = if input_str.trim().is_empty() {
@@ -76,9 +77,9 @@ impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
             format!("{} {}", response_text, input_str.trim())
         };
         let response_bytes = Bytes::from(response.into_bytes());
-        exchange.save_output(response_bytes);
+        exchange.set_input(response_bytes);
         Ok(HandlerStatus::new(
-            ExchangeState::OK | ExchangeState::REQUEST_COMPLETED,
+            ExchangeState::OK | ExchangeState::EXCHANGE_COMPLETED,
         ))
     }
 
@@ -102,13 +103,14 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
     async fn exec<'a>(
         &self,
         exchange: &mut Exchange<'a, Bytes, Bytes, Parts>,
-    ) -> Result<HandlerStatus, HandlerExecutionError> {
-        let input = exchange
-            .take_input()
-            .await
-            .map_err(|e| HandlerExecutionError {
-                message: format!("Failed to get input: {}", e).into(),
-            })?;
+    ) -> Result<HandlerStatus, Infallible> {
+        let input = match exchange.take_input().await {
+            Ok(input) => input,
+            Err(e) => {
+                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                    .message(format!("Could not consume input from exchange: {}", e)));
+            }
+        };
         let input_str = String::from_utf8_lossy(&input).to_string();
 
         let processed_input = if self.config.config().get().reverse {
@@ -119,9 +121,9 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
 
         let response = format!("Echo: {}", processed_input);
         let response_bytes = Bytes::from(response.into_bytes());
-        exchange.save_output(response_bytes);
+        exchange.set_output(response_bytes);
         Ok(HandlerStatus::new(
-            ExchangeState::OK | ExchangeState::REQUEST_COMPLETED,
+            ExchangeState::OK | ExchangeState::EXCHANGE_COMPLETED,
         ))
     }
 
@@ -132,8 +134,14 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
 
 // TODO - Make PathRouter easier to configure and use.
 // Create a router with appropriate handlers and routes using the corrected PathRouter structure
-fn create_router<'a>()
--> IdemioRouter<'a, Request<Incoming>, Bytes, Bytes, Parts, HyperExchangeFactory, DefaultExecutor> {
+fn create_router() -> RequestRouter<
+    Request<Incoming>,
+    Bytes,
+    Bytes,
+    Parts,
+    HyperExchangeFactory,
+    DefaultExecutor,
+> {
     let mut handler_registry = idemio::handler::registry::HandlerRegistry::new();
 
     // Register greeting handler
@@ -154,7 +162,7 @@ fn create_router<'a>()
         config: handler_config,
     };
     handler_registry
-        .register_handler(&greeting_handler_id, handler)
+        .register_handler(greeting_handler_id, handler)
         .unwrap();
 
     // Register echo handler
@@ -173,7 +181,7 @@ fn create_router<'a>()
         config: handler_config,
     };
     handler_registry
-        .register_handler(&echo_handler_id, handler)
+        .register_handler(echo_handler_id, handler)
         .unwrap();
 
     // Register idempotent logging handler
@@ -190,7 +198,7 @@ fn create_router<'a>()
 
     let handler = IdempotentLoggingHandler;
     handler_registry
-        .register_handler(&idempotent_logging_handler_id, handler)
+        .register_handler(idempotent_logging_handler_id, handler)
         .unwrap();
 
     // Create path configuration using the PathRouter structure
@@ -201,7 +209,7 @@ fn create_router<'a>()
     let mut echo_chain = PathChain::new();
     echo_chain
         .add_request_handler("idempotent_logging_handler")
-        .add_termination_handler("echo_handler");
+        .set_termination_handler("echo_handler");
     echo_methods.insert("POST".to_string(), echo_chain);
     paths.insert("/echo".to_string(), echo_methods);
 
@@ -210,7 +218,7 @@ fn create_router<'a>()
     let mut greet_chain = PathChain::new();
     greet_chain
         .add_request_handler("idempotent_logging_handler")
-        .add_termination_handler("greeting_handler");
+        .set_termination_handler("greeting_handler");
     greet_methods.insert("GET".to_string(), greet_chain);
     paths.insert("/greet".to_string(), greet_methods);
 
@@ -219,7 +227,7 @@ fn create_router<'a>()
     let mut wildcard_chain = PathChain::new();
     wildcard_chain
         .add_request_handler("idempotent_logging_handler")
-        .add_termination_handler("greeting_handler");
+        .set_termination_handler("greeting_handler");
     wildcard_methods.insert("GET".to_string(), wildcard_chain);
     paths.insert("/api/*".to_string(), wildcard_methods);
 
@@ -230,19 +238,18 @@ fn create_router<'a>()
     };
 
     // Create the router
-    IdemioRouter::new(
+    RequestRouter::new(
         &handler_registry,
         &router_config,
         HyperExchangeFactory,
         DefaultExecutor,
-    )
+    ).unwrap()
 }
 
 async fn handle_request(
     req: Request<Incoming>,
     router: Arc<
-        IdemioRouter<
-            '_,
+        RequestRouter<
             Request<Incoming>,
             Bytes,
             Bytes,
@@ -272,8 +279,8 @@ async fn handle_request(
             // Handle routing errors
             println!("Error handling request: {}", e);
             let (status_code, error_message) = match e {
-                RouterError::RouteNotFound => (404, "Route not found"),
-                RouterError::MethodNotSupported => (405, "Method not allowed"),
+                RouterError::RouteNotFound(_) => (404, "Route not found"),
+                RouterError::MethodNotSupported(_) => (405, "Method not allowed"),
                 RouterError::ExchangeCreationFailed(_) => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
