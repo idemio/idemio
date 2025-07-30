@@ -1,6 +1,7 @@
 use crate::handler::registry::{HandlerRegistry, HandlerRegistryError};
 use crate::handler::{Handler, HandlerId};
-pub use crate::router::config::{PathChain, PathConfig};
+use crate::router::config::Routes;
+pub use crate::router::config::{PathChain, RouterConfig};
 use fnv::{FnvBuildHasher, FnvHasher};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -235,7 +236,7 @@ where
     /// - Dynamic paths are stored in a tree structure for pattern matching
     /// - Returns an error if any handler is missing or configuration is invalid
     pub fn new(
-        route_config: &PathConfig,
+        route_config: &RouterConfig,
         registry: &HandlerRegistry<In, Out, Meta>,
     ) -> Result<Self, PathRouterError> {
         let mut router = Self {
@@ -332,55 +333,83 @@ where
     /// Result indicating success or PathRouterError if configuration is invalid.
     fn parse_config(
         &mut self,
-        route_config: &PathConfig,
+        route_config: &RouterConfig,
         handler_registry: &HandlerRegistry<In, Out, Meta>,
     ) -> Result<(), PathRouterError> {
-        log::info!("Starting router configuration parsing with '{}' paths", route_config.paths.len());
-        for (path, methods) in route_config.paths.iter() {
-            log::debug!("Processing path: '{}'", path);
-            // static paths (ones that do not contain '*') should be added to the fast path.
-            if !path.contains('*') {
-                log::trace!("Path '{}' is static, adding to fast path lookup", path);
-                for (method, path_chain) in methods {
-                    log::trace!("Adding static route: {} {}", method, path);
-                    let key = StaticPathKey::new(method, path);
-                    let loaded_chain = Self::load_handlers(handler_registry, path_chain)?;
-                    self.static_paths.insert(key, Arc::new(loaded_chain));
+        match &route_config.routes {
+            Routes::HttpRequestPaths(paths) => {
+                log::info!(
+                    "Starting router configuration parsing with '{}' paths",
+                    paths.len()
+                );
+                for (path, methods) in paths.iter() {
+                    log::debug!("Processing path: '{}'", path);
+                    // static paths (ones that do not contain '*') should be added to the fast path.
+                    if !path.contains('*') {
+                        log::trace!("Path '{}' is static, adding to fast path lookup", path);
+                        for (method, path_chain) in methods {
+                            log::trace!("Adding static route: {} {}", method, path);
+                            let key = StaticPathKey::new(method, path);
+                            let loaded_chain = Self::load_handlers(handler_registry, path_chain)?;
+                            self.static_paths.insert(key, Arc::new(loaded_chain));
+                        }
+                    } else {
+                        log::trace!(
+                            "Path '{}' contains wildcards, will be added to dynamic routing tree",
+                            path
+                        );
+                    }
+                    let path_segments = Self::split_path(path);
+                    let mut current_node = &mut self.nodes;
+                    let mut depth = 0;
+                    for segment in path_segments {
+                        let path_segment =
+                            PathSegment::from_str(segment).expect("Invalid path segment");
+                        let is_wild_card = path_segment == PathSegment::Any;
+                        log::trace!(
+                            "Processing segment '{}' at depth {} (wildcard: {})",
+                            segment,
+                            depth,
+                            is_wild_card
+                        );
+                        current_node = current_node
+                            .children
+                            .entry(path_segment)
+                            .or_insert_with(PathNode::default);
+                        current_node.segment_depth = depth;
+                        // wildcards should be the last segment in the path.
+                        if is_wild_card {
+                            log::trace!(
+                                "Encountered wildcard at depth {}, stopping path traversal",
+                                depth
+                            );
+                            break;
+                        }
+                        depth += 1;
+                    }
+                    log::debug!(
+                        "Built routing tree node at depth {} for path '{}'",
+                        depth - 1,
+                        path
+                    );
+                    for (method, handlers) in methods {
+                        let loaded_chain = Self::load_handlers(&handler_registry, handlers)?;
+                        let handler_count = loaded_chain.size();
+                        current_node
+                            .methods
+                            .insert(method.to_string(), Arc::new(loaded_chain));
+                        log::debug!(
+                            "Added {} handlers for method {} to path '{}'",
+                            handler_count,
+                            method,
+                            path
+                        );
+                    }
                 }
-            } else {
-                log::trace!("Path '{}' contains wildcards, will be added to dynamic routing tree", path);
+                Ok(())
             }
-            let path_segments = Self::split_path(path);
-            let mut current_node = &mut self.nodes;
-            let mut depth = 0;
-            for segment in path_segments {
-                let path_segment = PathSegment::from_str(segment)
-                    .expect("Invalid path segment");
-                let is_wild_card = path_segment == PathSegment::Any;
-                log::trace!("Processing segment '{}' at depth {} (wildcard: {})", segment, depth, is_wild_card);
-                current_node = current_node
-                    .children
-                    .entry(path_segment)
-                    .or_insert_with(PathNode::default);
-                current_node.segment_depth = depth;
-                // wildcards should be the last segment in the path.
-                if is_wild_card {
-                    log::trace!("Encountered wildcard at depth {}, stopping path traversal", depth);
-                    break;
-                }
-                depth += 1;
-            }
-            log::debug!("Built routing tree node at depth {} for path '{}'", depth - 1, path);
-            for (method, handlers) in methods {
-                let loaded_chain = Self::load_handlers(&handler_registry, handlers)?;
-                let handler_count = loaded_chain.size();
-                current_node
-                    .methods
-                    .insert(method.to_string(), Arc::new(loaded_chain));
-                log::debug!("Added {} handlers for method {} to path '{}'", handler_count, method, path);
-            }
+            Routes::HttpHeaderPaths(_) => todo!("implement header routing... and others"),
         }
-        Ok(())
     }
 
     /// Splits a path string into individual segments, filtering out empty segments.
@@ -509,10 +538,14 @@ mod test {
     use crate::handler::Handler;
     use crate::handler::HandlerId;
     use crate::handler::registry::HandlerRegistry;
-    use crate::router::route::{PathChain, PathConfig, PathRouter};
+    use crate::router::config::Routes;
+    use crate::router::config::builder::{
+        MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
+    };
+    use crate::router::route::{PathChain, PathRouter, RouterConfig};
     use crate::status::{ExchangeState, HandlerStatus};
     use async_trait::async_trait;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::convert::Infallible;
 
     #[derive(Debug)]
@@ -533,6 +566,7 @@ mod test {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn router_v2_test() {
         let mut registry = HandlerRegistry::<(), (), ()>::new();
         registry
@@ -547,40 +581,46 @@ mod test {
         registry
             .register_handler(HandlerId::new("test4"), DummyHandler)
             .unwrap();
+        registry
+            .register_handler(HandlerId::new("test6"), DummyHandler)
+            .unwrap();
+        registry
+            .register_handler(HandlerId::new("test7"), DummyHandler)
+            .unwrap();
+        registry
+            .register_handler(HandlerId::new("test8"), DummyHandler)
+            .unwrap();
+        registry
+            .register_handler(HandlerId::new("test9"), DummyHandler)
+            .unwrap();
 
-        let mut paths = HashMap::new();
-        let mut methods = HashMap::new();
-        let mut path_chain = PathChain::new();
-        path_chain
-            .add_request_handler("test1")
-            .add_request_handler("test2")
-            .set_termination_handler("test3")
-            .add_response_handler("test4");
-
-        methods.insert("POST".to_string(), path_chain.clone());
-        methods.insert("GET".to_string(), path_chain.clone());
-        paths.insert("/api/v1/users".to_string(), methods);
-
-        let mut methods = HashMap::new();
-        methods.insert("GET".to_string(), path_chain.clone());
-        paths.insert("/api/v1/*".to_string(), methods);
-
-        let config = PathConfig {
-            chains: HashMap::new(),
-            paths,
-        };
+        let config = SingleServiceConfigBuilder::new()
+            .with_chain("test_chain", &["test1", "test2", "test6", "test7", "test8", "test9"])
+            .start_route("/api/v1/*")
+                .post()
+                    .with_request_chain("test_chain")
+                    .with_termination_handler("test3")
+                    .with_response_handler("test4")
+                .end_method()
+                .get()
+                    .with_request_chain("test_chain")
+                    .with_termination_handler("test3")
+                    .with_response_handler("test4")
+                .end_method()
+            .end_route()
+            .build();
 
         let table = PathRouter::new(&config, &registry).unwrap();
 
         let result = table.lookup("/api/v1/users", "GET");
         assert!(result.is_some());
         let handlers = result.unwrap();
-        assert_eq!(handlers.request_handlers.len(), 2);
+        assert_eq!(handlers.request_handlers.len(), 6);
 
         let result = table.lookup("/api/v1/someOtherEndpoint", "GET");
         assert!(result.is_some());
         let handlers = result.unwrap();
-        assert_eq!(handlers.request_handlers.len(), 2);
+        assert_eq!(handlers.request_handlers.len(), 6);
 
         let result = table.lookup("/invalid", "GET");
         assert!(result.is_none());
@@ -588,6 +628,6 @@ mod test {
         let result = table.lookup("/api/v1/users/somethingElse", "GET");
         assert!(result.is_some());
         let handlers = result.unwrap();
-        assert_eq!(handlers.request_handlers.len(), 2);
+        assert_eq!(handlers.request_handlers.len(), 6);
     }
 }

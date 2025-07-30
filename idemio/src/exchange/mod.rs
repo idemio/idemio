@@ -2063,13 +2063,13 @@ mod test {
     #[cfg(feature = "hyper")]
     #[tokio::test]
     async fn test_unified_exchange_streaming_with_collector() {
-        use crate::exchange::collector::hyper::BytesCollector;
+        use crate::exchange::collector::hyper::HyperBytesCollector;
 
         let mut exchange: Exchange<'_, Bytes, Bytes, ()> = Exchange::new();
 
         // Test streaming input with collector
         let input_stream = stream::iter(vec![Ok(Bytes::from("chunk1")), Ok(Bytes::from("chunk2"))]);
-        exchange.set_input_stream_with_collector(input_stream, Box::new(BytesCollector));
+        exchange.set_input_stream_with_collector(input_stream, Box::new(HyperBytesCollector));
 
         assert!(exchange.has_input());
 

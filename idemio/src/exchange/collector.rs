@@ -10,16 +10,16 @@ pub mod hyper {
     use hyper::body::Bytes;
 
     /// A collector that combines multiple `Bytes` chunks into a single `Bytes` instance.
-    pub struct BytesCollector;
+    pub struct HyperBytesCollector;
 
-    impl StreamCollector<Bytes> for BytesCollector {
+    impl StreamCollector<Bytes> for HyperBytesCollector {
         /// Collects a vector of `Bytes` chunks into a single `Bytes` instance.
         ///
         /// # Parameters
         /// - `items`: A vector of `Bytes` chunks to be combined
         ///
         /// # Returns
-        /// Returns `Ok(Bytes)` containing all input bytes concatenated, or `Err(CollectorError)` if collection fails.
+        /// `Ok(Bytes)` containing all input bytes concatenated, or `Err(CollectorError)` if collection fails.
         ///
         /// # Behavior
         /// If the input vector is empty, returns an empty `Bytes` instance. Otherwise, calculates the total
@@ -48,7 +48,7 @@ impl StreamCollector<String> for StringCollector {
     /// - `items`: A vector of strings to be concatenated
     ///
     /// # Returns
-    /// Returns `Ok(String)` containing all input strings concatenated, or `Err(CollectorError)` if collection fails.
+    /// `Ok(String)` containing all input strings concatenated, or `Err(CollectorError)` if collection fails.
     ///
     /// # Behavior
     /// If the input vector is empty, returns an empty string. Otherwise, calculates the total
@@ -90,7 +90,7 @@ where
     /// - `items`: A vector of vectors to be flattened
     ///
     /// # Returns
-    /// Returns `Ok(Vec<T>)` containing all elements from input vectors, or `Err(CollectorError)` if collection fails.
+    /// `Ok(Vec<T>)` containing all elements from input vectors, or `Err(CollectorError)` if collection fails.
     ///
     /// # Behavior
     /// Calculates the total length of all input vectors and pre-allocates a result vector
@@ -116,7 +116,7 @@ pub trait StreamCollector<T>: Send + Sync {
     /// - `items`: A vector of items to be collected/combined
     ///
     /// # Returns
-    /// Returns `Ok(T)` containing the collected result, or `Err(CollectorError)` if collection fails.
+    /// `Ok(T)` containing the collected result, or `Err(CollectorError)` if collection fails.
     fn collect(&self, items: Vec<T>) -> Result<T, CollectorError>;
 }
 
@@ -149,7 +149,7 @@ where
     /// - `value`: The value to wrap
     ///
     /// # Returns
-    /// Returns a `StreamOrValue::Value` containing the provided value.
+    /// `StreamOrValue::Value` containing the provided value.
     ///
     /// # Examples
     /// ```rust
@@ -169,7 +169,7 @@ where
     /// - `stream`: A stream that yields `Result<T, Box<dyn Error + Send + Sync>>`
     ///
     /// # Returns
-    /// Returns a `StreamOrValue::Stream` containing the provided stream.
+    /// `StreamOrValue::Stream` containing the provided stream.
     ///
     /// # Examples
     /// ```rust
@@ -196,7 +196,7 @@ where
     /// - `collector`: A boxed collector for combining stream items
     ///
     /// # Returns
-    /// Returns a `StreamOrValue::Stream` containing the provided stream and collector.
+    /// `StreamOrValue::Stream` containing the provided stream and collector.
     ///
     /// # Examples
     /// ```rust
@@ -222,11 +222,11 @@ where
         Self::Stream(Box::pin(stream), Some(collector))
     }
 
-    /// Gets a reference to the value, collecting from stream if needed.
+    /// Gets a reference to the value, collecting from the stream if needed.
     ///
     /// # Returns
-    /// Returns `Ok(&T)` containing a reference to the value, or `Err(CollectorError)` if
-    /// collection fails or no collector is available for a stream.
+    /// `Ok(&T)` containing a reference to the value, or
+    /// `Err(CollectorError)` if a collection fails or no collector is available for a stream.
     ///
     /// # Examples
     /// ```rust
@@ -257,18 +257,7 @@ where
                     }
                     Some(collector) => collector,
                 };
-                let mut items = Vec::new();
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(item) => items.push(item),
-                        Err(e) => {
-                            return Err(CollectorError::stream_collect_error(format!(
-                                "Could not collect stream: {}",
-                                e
-                            )));
-                        }
-                    }
-                }
+                let items = Self::collect_stream_items(stream).await?;
                 let collected = collector.collect(items)?;
                 *self = StreamOrValue::Collected(collected);
                 match self {
@@ -279,13 +268,44 @@ where
         }
     }
 
+    /// Helper function to collect all items from a stream into a vector.
+    ///
+    /// # Parameters
+    /// - `stream`: A mutable reference to the stream to collect from
+    ///
+    /// # Returns
+    /// Returns `Ok(Vec<T>)` containing all collected items, or `Err(CollectorError)` if any stream item fails.
+    ///
+    /// # Behavior
+    /// Iterates through the stream, collecting successful items and returning an error
+    /// immediately if any item fails.
+    #[inline]
+    async fn collect_stream_items(
+        stream: &mut Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a>>,
+    ) -> Result<Vec<T>, CollectorError> {
+        let mut items = Vec::new();
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(item) => items.push(item),
+                Err(e) => {
+                    return Err(CollectorError::stream_collect_error(format!(
+                        "Could not collect stream: {}",
+                        e
+                    )));
+                }
+            }
+        }
+        Ok(items)
+    }
+
+
     /// Gets a reference to the value using a provided collector.
     ///
     /// # Parameters
     /// - `collector`: A collector implementing `StreamCollector<T>` for combining stream items
     ///
     /// # Returns
-    /// Returns `Ok(&T)` containing a reference to the value, or `Err(CollectorError)` if collection fails.
+    /// `Ok(&T)` containing a reference to the value, or `Err(CollectorError)` if collection fails.
     ///
     /// # Examples
     /// ```rust
@@ -312,16 +332,7 @@ where
             StreamOrValue::Value(val) => Ok(val),
             StreamOrValue::Collected(val) => Ok(val),
             StreamOrValue::Stream(stream, _) => {
-                let mut items = Vec::new();
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(item) => items.push(item),
-                        Err(e) => {
-                            let msg = format!("Could not collect stream: {}", e.to_string());
-                            return Err(CollectorError::stream_collect_error(msg));
-                        }
-                    }
-                }
+                let items = Self::collect_stream_items(stream).await?;
                 let collected = collector.collect(items)?;
                 *self = StreamOrValue::Collected(collected);
                 match self {
@@ -335,7 +346,7 @@ where
     /// Takes ownership of the value, collecting from stream if needed.
     ///
     /// # Returns
-    /// Returns `Ok(T)` containing the owned value, or `Err(CollectorError)` if
+    /// `Ok(T)` containing the owned value, or `Err(CollectorError)` if
     /// collection fails or no collector is available for a stream.
     ///
     /// # Examples
@@ -361,18 +372,7 @@ where
                 let collector = collector.ok_or_else(|| {
                     CollectorError::invalid_stream_error("No collector present for stream.")
                 })?;
-                let mut items = Vec::new();
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(item) => items.push(item),
-                        Err(e) => {
-                            return Err(CollectorError::stream_collect_error(format!(
-                                "Could not collect stream: {}",
-                                e.to_string()
-                            )));
-                        }
-                    }
-                }
+                let items = Self::collect_stream_items(&mut stream).await?;
                 collector.collect(items)
             }
         }
@@ -384,7 +384,7 @@ where
     /// - `collector`: A collector implementing `StreamCollector<T>` for combining stream items
     ///
     /// # Returns
-    /// Returns `Ok(T)` containing the owned value, or `Err(CollectorError)` if collection fails.
+    /// `Ok(T)` containing the owned value, or `Err(CollectorError)` if collection fails.
     ///
     /// # Examples
     /// ```rust
@@ -410,18 +410,7 @@ where
             StreamOrValue::Value(val) => Ok(val),
             StreamOrValue::Collected(val) => Ok(val),
             StreamOrValue::Stream(mut stream, _) => {
-                let mut items = Vec::new();
-                while let Some(result) = stream.next().await {
-                    match result {
-                        Ok(item) => items.push(item),
-                        Err(e) => {
-                            return Err(CollectorError::stream_collect_error(format!(
-                                "Could not collect stream: {}",
-                                e.to_string()
-                            )));
-                        }
-                    }
-                }
+                let items = Self::collect_stream_items(&mut stream).await?;
                 collector.collect(items)
             }
         }
@@ -430,7 +419,7 @@ where
     /// Extracts the underlying stream if present.
     ///
     /// # Returns
-    /// Returns `Ok(Pin<Box<dyn Stream<...>>>)` containing the stream, or `Err(CollectorError)`
+    /// `Ok(Pin<Box<dyn Stream<...>>>)` containing the stream, or `Err(CollectorError)`
     /// if this instance doesn't contain a stream.
     ///
     /// # Examples

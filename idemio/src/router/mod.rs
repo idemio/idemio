@@ -4,7 +4,7 @@ pub mod factory;
 pub mod route;
 
 use crate::handler::registry::HandlerRegistry;
-use crate::router::config::PathConfig;
+use crate::router::config::RouterConfig;
 use crate::router::executor::{ExecutorError, HandlerExecutor};
 use crate::router::factory::ExchangeFactory;
 use crate::router::route::PathRouter;
@@ -58,7 +58,7 @@ where
 {
     pub fn new(
         registry: &HandlerRegistry<In, Out, Meta>,
-        config: &PathConfig,
+        config: &RouterConfig,
         exchange_factory: Factory,
         handler_executor: Exec,
     ) -> Result<Self, RouterError> {

@@ -20,10 +20,11 @@ use idemio::handler::Handler;
 use idemio::handler::HandlerId;
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::route::{PathChain, PathConfig};
+use idemio::router::route::{PathChain, RouterConfig};
 use idemio::router::{RequestRouter, Router, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
+use idemio::router::config::builder::{MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder};
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct IdempotentLoggingHandlerConfig;
@@ -134,14 +135,9 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
 
 // TODO - Make PathRouter easier to configure and use.
 // Create a router with appropriate handlers and routes using the corrected PathRouter structure
-fn create_router() -> RequestRouter<
-    Request<Incoming>,
-    Bytes,
-    Bytes,
-    Parts,
-    HyperExchangeFactory,
-    DefaultExecutor,
-> {
+#[rustfmt::skip]
+fn create_router()
+-> RequestRouter<Request<Incoming>, Bytes, Bytes, Parts, HyperExchangeFactory, DefaultExecutor> {
     let mut handler_registry = idemio::handler::registry::HandlerRegistry::new();
 
     // Register greeting handler
@@ -201,41 +197,26 @@ fn create_router() -> RequestRouter<
         .register_handler(idempotent_logging_handler_id, handler)
         .unwrap();
 
-    // Create path configuration using the PathRouter structure
-    let mut paths = HashMap::new();
-
-    // Configure echo endpoint with POST method
-    let mut echo_methods = HashMap::new();
-    let mut echo_chain = PathChain::new();
-    echo_chain
-        .add_request_handler("idempotent_logging_handler")
-        .set_termination_handler("echo_handler");
-    echo_methods.insert("POST".to_string(), echo_chain);
-    paths.insert("/echo".to_string(), echo_methods);
-
-    // Configure greeting endpoint with GET method
-    let mut greet_methods = HashMap::new();
-    let mut greet_chain = PathChain::new();
-    greet_chain
-        .add_request_handler("idempotent_logging_handler")
-        .set_termination_handler("greeting_handler");
-    greet_methods.insert("GET".to_string(), greet_chain);
-    paths.insert("/greet".to_string(), greet_methods);
-
-    // Add wildcard route for demonstration
-    let mut wildcard_methods = HashMap::new();
-    let mut wildcard_chain = PathChain::new();
-    wildcard_chain
-        .add_request_handler("idempotent_logging_handler")
-        .set_termination_handler("greeting_handler");
-    wildcard_methods.insert("GET".to_string(), wildcard_chain);
-    paths.insert("/api/*".to_string(), wildcard_methods);
-
-    // Create router configuration matching PathRouter expectations
-    let router_config = PathConfig {
-        chains: HashMap::new(), // Not used in this PathRouter implementation
-        paths,
-    };
+    let router_config = SingleServiceConfigBuilder::new()
+        .start_route("/echo")
+            .post()
+                .with_request_handler("idempotent_logging_handler")
+                .with_termination_handler("echo_handler")
+            .end_method()
+        .end_route()
+        .start_route("/greet")
+            .get()
+                .with_request_chain("idempotent_logging_handler")
+                .with_termination_handler("greeting_handler")
+            .end_method()
+        .end_route()
+        .start_route("/api/*")
+            .get()
+                .with_request_handler("idempotent_logging_handler")
+                .with_termination_handler("greeting_handler")
+            .end_method()
+        .end_route()
+        .build();
 
     // Create the router
     RequestRouter::new(
@@ -243,7 +224,8 @@ fn create_router() -> RequestRouter<
         &router_config,
         HyperExchangeFactory,
         DefaultExecutor,
-    ).unwrap()
+    )
+    .unwrap()
 }
 
 async fn handle_request(

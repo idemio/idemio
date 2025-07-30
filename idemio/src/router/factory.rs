@@ -92,7 +92,7 @@ pub mod hyper {
     use crate::router::factory::ExchangeFactory;
     use hyper::body::{Bytes, Incoming};
     use hyper::http::request::Parts;
-    use crate::exchange::collector::hyper::BytesCollector;
+    use crate::exchange::collector::hyper::HyperBytesCollector;
 
     /// Factory implementation for creating exchanges from Hyper HTTP requests.
     ///
@@ -189,7 +189,7 @@ pub mod hyper {
             // Set the input stream with a BytesCollector
             exchange.set_input_stream_with_collector(
                 Box::pin(body_stream),
-                Box::new(BytesCollector),
+                Box::new(HyperBytesCollector),
             );
 
             exchange.set_metadata(parts);

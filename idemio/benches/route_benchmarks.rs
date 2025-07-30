@@ -1,11 +1,13 @@
 use async_trait::async_trait;
 use criterion::{Criterion, criterion_group, criterion_main};
 use idemio::exchange::Exchange;
-use idemio::handler::{Handler, HandlerId};
 use idemio::handler::registry::HandlerRegistry;
-use idemio::router::route::{PathChain, PathConfig, PathRouter};
+use idemio::handler::{Handler, HandlerId};
+use idemio::router::config::builder::{
+    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
+};
+use idemio::router::route::PathRouter;
 use idemio::status::{ExchangeState, HandlerStatus};
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::hint::black_box;
 // This is a simple benchmark to aid development of the router
@@ -42,49 +44,44 @@ fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathRouter<(), 
         .register_handler(HandlerId::new("test4"), DummyHandler)
         .unwrap();
 
-    let mut paths = HashMap::new();
+    let mut builder = SingleServiceConfigBuilder::new();
+
+    // Build routes using the service builder pattern
     for i in 1..num_routes {
-        let mut methods = HashMap::new();
         let path = format!("/test/{}", i);
         match i % 4 {
             0 => {
-                let mut chain = PathChain::new();
-                chain
-                    .add_request_handler("test1")
-                    .add_request_handler("test2")
-                    .add_request_handler("test3")
-                    .set_termination_handler("test4");
-                methods.insert("GET".to_string(), chain);
+                builder = builder
+                    .start_route(path)
+                    .get()
+                    .with_request_handlers(&["test1", "test2", "test3"])
+                    .with_termination_handler("test4")
+                    .end_method()
+                    .end_route();
             }
             _ => {
-                let mut chain = PathChain::new();
-                chain
-                    .add_request_handler("test1")
-                    .set_termination_handler("test4");
-                methods.insert("POST".to_string(), chain);
+                builder = builder
+                    .start_route(path)
+                    .post()
+                    .with_request_handler("test1")
+                    .with_termination_handler("test4")
+                    .end_method()
+                    .end_route();
             }
         }
-        paths.insert(path, methods);
     }
 
-    let path = "/test/abc/*".to_string();
-    let mut chain = PathChain::new();
-    chain
-        .add_request_handler("test1")
-        .add_request_handler("test2")
-        .add_request_handler("test3")
-        .set_termination_handler("test4")
-        .add_response_handler("test1")
-        .add_response_handler("test2")
-        .add_response_handler("test3");
-    let mut methods = HashMap::new();
-    methods.insert("GET".to_string(), chain);
-    paths.insert(path, methods);
+    // Add the wildcard route
+    builder = builder
+        .start_route("/test/abc/*")
+        .get()
+        .with_request_handlers(&["test1", "test2", "test3"])
+        .with_termination_handler("test4")
+        .with_response_handlers(&["test1", "test2", "test3"])
+        .end_method()
+        .end_route();
 
-    let config = PathConfig {
-        chains: HashMap::new(),
-        paths,
-    };
+    let config = builder.build();
     PathRouter::new(&config, &registry).unwrap()
 }
 
