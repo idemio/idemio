@@ -29,38 +29,45 @@ where
     async fn route(&self, request: Req) -> Result<Out, RouterError>;
 }
 
-/// Default implementation of the Router trait
-pub struct RequestRouter<Req, In, Out, Meta, Factory, Exec>
+pub trait RouterComponents<Req, In, Out, Meta>
 where
     Req: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Exec: HandlerExecutor<In, Out, Meta>,
-    Factory: ExchangeFactory<Req, In, Out, Meta>,
-    Req: Send,
 {
-    phantom: PhantomData<Req>,
-    exchange_factory: Arc<Factory>,
-    handler_executor: Arc<Exec>,
-    route_table: PathRouter<In, Out, Meta>,
+    type Factory: ExchangeFactory<Req, In, Out, Meta> + Send + Sync;
+    type Executor: HandlerExecutor<In, Out, Meta> + Send + Sync;
 }
 
-impl<Req, In, Out, Meta, Factory, Exec> RequestRouter<Req, In, Out, Meta, Factory, Exec>
+/// Default implementation of the Router trait
+pub struct RequestRouter<Req, In, Out, Meta, Components>
 where
     Req: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Exec: HandlerExecutor<In, Out, Meta> + Send + Sync,
-    Factory: ExchangeFactory<Req, In, Out, Meta>,
-    Req: Send,
+    Components: RouterComponents<Req, In, Out, Meta>,
+{
+    phantom: PhantomData<Req>,
+    factory: Arc<Components::Factory>,
+    executor: Arc<Components::Executor>,
+    router: PathRouter<In, Out, Meta>,
+}
+
+impl<Req, In, Out, Meta, Components> RequestRouter<Req, In, Out, Meta, Components>
+where
+    Req: Send + Sync,
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
+    Components: RouterComponents<Req, In, Out, Meta>,
 {
     pub fn new(
         registry: &HandlerRegistry<In, Out, Meta>,
         config: &RouterConfig,
-        exchange_factory: Factory,
-        handler_executor: Exec,
+        exchange_factory: Components::Factory,
+        handler_executor: Components::Executor,
     ) -> Result<Self, RouterError> {
         let route_table = match PathRouter::new(config, registry) {
             Ok(table) => table,
@@ -68,38 +75,37 @@ where
         };
         Ok(Self {
             phantom: PhantomData::default(),
-            exchange_factory: Arc::new(exchange_factory),
-            handler_executor: Arc::new(handler_executor),
-            route_table,
+            factory: Arc::new(exchange_factory),
+            executor: Arc::new(handler_executor),
+            router: route_table,
         })
     }
 }
 
 #[async_trait]
-impl<Req, In, Out, Meta, Factory, Exec> Router<Req, In, Out, Meta>
-    for RequestRouter<Req, In, Out, Meta, Factory, Exec>
+impl<Req, In, Out, Meta, Components> Router<Req, In, Out, Meta>
+    for RequestRouter<Req, In, Out, Meta, Components>
 where
     Req: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
-    Exec: HandlerExecutor<In, Out, Meta> + Send + Sync,
-    Factory: ExchangeFactory<Req, In, Out, Meta>,
+    Components: RouterComponents<Req, In, Out, Meta>,
 {
     async fn route(&self, request: Req) -> Result<Out, RouterError> {
-        let (path, method) = self.exchange_factory.extract_route_info(&request).await?;
+        let (path, method) = self.factory.extract_route_info(&request).await?;
         log::trace!("Extracted route info from request: {}@{}", &path, &method);
 
         let executables = self
-            .route_table
+            .router
             .lookup(path, method)
             .ok_or(RouterError::route_not_found(path))?;
         log::trace!("Found handler chain for request: {}@{}", &path, &method);
-        let mut exchange = self.exchange_factory.create_exchange(request).await?;
+        let mut exchange = self.factory.create_exchange(request).await?;
 
         //self.execute_handlers(executables, &mut exchange).await?;
         let result = self
-            .handler_executor
+            .executor
             .execute_handlers(executables, &mut exchange)
             .await
             .map_err(|e| RouterError::execution_failed(e))?;

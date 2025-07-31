@@ -109,28 +109,23 @@ impl PathChain {
     }
 
     fn add_request_handler(&mut self, handler: impl Into<String>) -> &mut Self {
-        match &mut self.request_handlers {
-            Some(handlers) => handlers.push(handler.into()),
-            None => {
-                self.request_handlers = Some(vec![handler.into()]);
-            }
-        }
+        self.request_handlers
+            .get_or_insert_with(Vec::new)
+            .push(handler.into());
         self
     }
 
-    fn set_termination_handler(&mut self, handler: impl Into<String>) -> &mut Self {
+    fn termination_handler(&mut self, handler: impl Into<String>) -> &mut Self {
         self.termination_handler = Some(handler.into());
         self
     }
 
     fn add_response_handler(&mut self, handler: impl Into<String>) -> &mut Self {
-        match &mut self.response_handlers {
-            Some(handlers) => handlers.push(handler.into()),
-            None => {
-                self.response_handlers = Some(vec![handler.into()]);
-            }
-        }
+        self.response_handlers
+            .get_or_insert_with(Vec::new)
+            .push(handler.into());
         self
+
     }
 }
 
@@ -227,7 +222,10 @@ pub mod builder {
 
             match self.routes.get_mut(path) {
                 Some(x) => x,
-                None => todo!("Implement error handling for missing route"),
+                None => {
+                    self.routes.insert(path.to_string(), HashMap::new());
+                    self.routes.get_mut(path).unwrap()
+                }
             }
             .insert(method, path_chain);
         }
@@ -257,7 +255,7 @@ pub mod builder {
             self
         }
 
-        fn with_chain(
+        fn chain(
             mut self,
             chain_name: impl Into<String>,
             handler_names: &[impl AsRef<str>],
@@ -266,7 +264,7 @@ pub mod builder {
             self
         }
 
-        fn start_route(self, path: impl Into<String>) -> Self::RouteBuilder;
+        fn route(self, path: impl Into<String>) -> Self::RouteBuilder;
     }
 
     /// Trait for route builders that can configure HTTP methods
@@ -315,36 +313,36 @@ pub mod builder {
         fn path_chain(&mut self) -> &mut PathChain;
         fn chains(&self) -> &HashMap<String, Vec<String>>;
 
-        fn with_request_handlers(mut self, handlers: &[impl AsRef<str>]) -> Self {
+        fn request_handlers(mut self, handlers: &[impl AsRef<str>]) -> Self {
             for handler in handlers {
                 self.path_chain().add_request_handler(handler.as_ref());
             }
             self
         }
 
-        fn with_request_handler(mut self, handler: impl Into<String>) -> Self {
+        fn request_handler(mut self, handler: impl Into<String>) -> Self {
             self.path_chain().add_request_handler(handler);
             self
         }
 
-        fn with_termination_handler(mut self, handler: impl Into<String>) -> Self {
-            self.path_chain().set_termination_handler(handler);
+        fn termination_handler(mut self, handler: impl Into<String>) -> Self {
+            self.path_chain().termination_handler(handler);
             self
         }
 
-        fn with_response_handlers(mut self, handlers: &[impl AsRef<str>]) -> Self {
+        fn response_handlers(mut self, handlers: &[impl AsRef<str>]) -> Self {
             for handler in handlers {
                 self.path_chain().add_response_handler(handler.as_ref());
             }
             self
         }
 
-        fn with_response_handler(mut self, handler: impl Into<String>) -> Self {
+        fn response_handler(mut self, handler: impl Into<String>) -> Self {
             self.path_chain().add_response_handler(handler);
             self
         }
 
-        fn with_request_chain(mut self, chain_name: impl AsRef<str>) -> Self {
+        fn request_chain(mut self, chain_name: impl AsRef<str>) -> Self {
             if let Some(chain_handlers) = self.chains().get(chain_name.as_ref()) {
                 let handlers: Vec<String> = chain_handlers.clone();
                 for handler in handlers {
@@ -354,7 +352,7 @@ pub mod builder {
             self
         }
 
-        fn with_response_chain(mut self, chain_name: impl AsRef<str>) -> Self {
+        fn response_chain(mut self, chain_name: impl AsRef<str>) -> Self {
             if let Some(chain_handlers) = self.chains().get(chain_name.as_ref()) {
                 let handlers: Vec<String> = chain_handlers.clone();
                 for handler in handlers {
@@ -396,7 +394,7 @@ pub mod builder {
             &mut self.core
         }
 
-        fn start_route(mut self, path: impl Into<String>) -> Self::RouteBuilder {
+        fn route(mut self, path: impl Into<String>) -> Self::RouteBuilder {
             let path = path.into();
             self.core.ensure_route_exists(&path);
 
@@ -470,12 +468,12 @@ pub mod builder {
             }
         }
 
-        pub fn with_route_type(mut self, route_type: RouteType) -> Self {
+        pub fn route_type(mut self, route_type: RouteType) -> Self {
             self.key = route_type;
             self
         }
 
-        pub fn with_service(self, service_name: impl Into<String>) -> SharedServiceBuilder {
+        pub fn service(self, service_name: impl Into<String>) -> SharedServiceBuilder {
             SharedServiceBuilder {
                 shared_builder: self,
                 service_name: service_name.into(),
@@ -514,7 +512,7 @@ pub mod builder {
             &mut self.core
         }
 
-        fn start_route(mut self, path: impl Into<String>) -> Self::RouteBuilder {
+        fn route(mut self, path: impl Into<String>) -> Self::RouteBuilder {
             let path = path.into();
             self.core.ensure_route_exists(&path);
 
@@ -583,27 +581,27 @@ pub mod builder {
         #[rustfmt::skip]
         fn test_single_service_multiple_methods_same_route() {
             let config = SingleServiceConfigBuilder::new()
-                .with_chain("auth_chain", &["cors", "auth"])
-                .start_route("/api/users")
+                .chain("auth_chain", &["cors", "auth"])
+                .route("/api/users")
                     .get()
-                        .with_request_chain("auth_chain")
-                        .with_termination_handler("get_users")
+                        .request_chain("auth_chain")
+                        .termination_handler("get_users")
                         .end_method()
                     .post()
-                        .with_request_chain("auth_chain")
-                        .with_request_handler("validator")
-                        .with_termination_handler("create_user")
+                        .request_chain("auth_chain")
+                        .request_handler("validator")
+                        .termination_handler("create_user")
                         .end_method()
                     .put()
-                        .with_termination_handler("update_user")
+                        .termination_handler("update_user")
                         .end_method()
                     .delete()
-                        .with_termination_handler("delete_user")
+                        .termination_handler("delete_user")
                         .end_method()
                     .end_route()
-                .start_route("/api/orders")
+                .route("/api/orders")
                     .get()
-                        .with_termination_handler("get_orders")
+                        .termination_handler("get_orders")
                         .end_method()
                     .end_route()
                 .build();
@@ -637,40 +635,40 @@ pub mod builder {
         #[rustfmt::skip]
         fn test_shared_service_multiple_methods_same_route() {
             let config = SharedConfigBuilder::new()
-                .with_route_type(RouteType::header("x-service-id"))
-                .with_service("user_service")
-                    .with_chain("user_auth", &["auth_middleware", "user_validator"])
-                    .start_route("/api/users")
+                .route_type(RouteType::header("x-service-id"))
+                .service("user_service")
+                    .chain("user_auth", &["auth_middleware", "user_validator"])
+                    .route("/api/users")
                         .get()
-                            .with_request_chain("user_auth")
-                            .with_termination_handler("get_users")
+                            .request_chain("user_auth")
+                            .termination_handler("get_users")
                         .end_method()
                         .post()
-                            .with_request_chain("user_auth")
-                            .with_request_handler("create_validator")
-                            .with_termination_handler("create_user")
-                            .with_response_handler("audit_logger")
+                            .request_chain("user_auth")
+                            .request_handler("create_validator")
+                            .termination_handler("create_user")
+                            .response_handler("audit_logger")
                         .end_method()
                         .put()
-                            .with_termination_handler("update_user")
+                            .termination_handler("update_user")
                         .end_method()
                         .delete()
-                            .with_termination_handler("delete_user")
+                            .termination_handler("delete_user")
                         .end_method()
                         .end_route()
-                    .start_route("/api/profile")
+                    .route("/api/profile")
                         .get()
-                            .with_termination_handler("get_profile")
+                            .termination_handler("get_profile")
                         .end_method()
                     .end_route()
                 .end_service()
-                .with_service("order_service")
-                    .start_route("/api/orders")
+                .service("order_service")
+                    .route("/api/orders")
                         .get()
-                            .with_termination_handler("list_orders")
+                            .termination_handler("list_orders")
                         .end_method()
                         .post()
-                            .with_termination_handler("create_order")
+                            .termination_handler("create_order")
                         .end_method()
                     .end_route()
                 .end_service()
@@ -713,24 +711,24 @@ pub mod builder {
             // This test demonstrates the improved fluent API
             let config = SingleServiceConfigBuilder::new()
                 .handler("common_handler")
-                .start_route("/api/resource")
+                .route("/api/resource")
                     // Multiple methods on same route
                     .get()
-                        .with_termination_handler("get_handler")
+                        .termination_handler("get_handler")
                         .end_method()
                     .post()
-                        .with_request_handler("validator")
-                        .with_termination_handler("create_handler")
-                        .with_response_handler("logger")
+                        .request_handler("validator")
+                        .termination_handler("create_handler")
+                        .response_handler("logger")
                         .end_method()
                     .put()
-                        .with_termination_handler("update_handler")
+                        .termination_handler("update_handler")
                         .end_method()
                     // Move to next route
                     .end_route()
-                .start_route("/api/another")
+                .route("/api/another")
                     .get()
-                        .with_termination_handler("another_get")
+                        .termination_handler("another_get")
                         .end_method()
                     .end_route()
                 .build();

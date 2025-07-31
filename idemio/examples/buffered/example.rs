@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -8,23 +7,39 @@ use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::http::request::Parts;
-use hyper::server::conn::http2;
+use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use serde::{Deserialize, Serialize};
 
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioIo;
 use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
 use idemio::exchange::Exchange;
 use idemio::handler::Handler;
 use idemio::handler::HandlerId;
+use idemio::handler::registry::HandlerRegistry;
+use idemio::router::config::builder::{
+    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
+};
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::route::{PathChain, RouterConfig};
-use idemio::router::{RequestRouter, Router, RouterError};
+use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
-use idemio::router::config::builder::{MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder};
+
+// Define the RouterComponents implementation for Hyper
+struct HyperComponents;
+
+impl RouterComponents<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts>
+    for HyperComponents
+{
+    type Factory = HyperExchangeFactory;
+    type Executor = DefaultExecutor;
+}
+
+// Type alias for cleaner signatures
+type HyperRouter =
+    RequestRouter<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts, HyperComponents>;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct IdempotentLoggingHandlerConfig;
@@ -33,10 +48,10 @@ struct IdempotentLoggingHandlerConfig;
 struct IdempotentLoggingHandler;
 
 #[async_trait]
-impl Handler<Bytes, Bytes, Parts> for IdempotentLoggingHandler {
+impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for IdempotentLoggingHandler {
     async fn exec<'a>(
         &self,
-        _exchange: &mut Exchange<'a, Bytes, Bytes, Parts>,
+        _exchange: &mut Exchange<'a, Bytes, BoxBody<Bytes, std::io::Error>, Parts>,
     ) -> Result<HandlerStatus, Infallible> {
         println!("Processing request with idempotent logging handler");
         Ok(HandlerStatus::new(ExchangeState::OK))
@@ -58,10 +73,10 @@ struct GreetingHandler {
 }
 
 #[async_trait]
-impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
+impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for GreetingHandler {
     async fn exec<'a>(
         &self,
-        exchange: &mut Exchange<'a, Bytes, Bytes, Parts>,
+        exchange: &mut Exchange<'a, Bytes, BoxBody<Bytes, std::io::Error>, Parts>,
     ) -> Result<HandlerStatus, Infallible> {
         let input = match exchange.take_input().await {
             Ok(input) => input,
@@ -78,7 +93,11 @@ impl Handler<Bytes, Bytes, Parts> for GreetingHandler {
             format!("{} {}", response_text, input_str.trim())
         };
         let response_bytes = Bytes::from(response.into_bytes());
-        exchange.set_input(response_bytes);
+        exchange.set_output(
+            Full::new(response_bytes)
+                .map_err(|_| unreachable!("Infallible"))
+                .boxed(),
+        );
         Ok(HandlerStatus::new(
             ExchangeState::OK | ExchangeState::EXCHANGE_COMPLETED,
         ))
@@ -100,10 +119,10 @@ struct EchoHandler {
 }
 
 #[async_trait]
-impl Handler<Bytes, Bytes, Parts> for EchoHandler {
+impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for EchoHandler {
     async fn exec<'a>(
         &self,
-        exchange: &mut Exchange<'a, Bytes, Bytes, Parts>,
+        exchange: &mut Exchange<'a, Bytes, BoxBody<Bytes, std::io::Error>, Parts>,
     ) -> Result<HandlerStatus, Infallible> {
         let input = match exchange.take_input().await {
             Ok(input) => input,
@@ -122,7 +141,11 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
 
         let response = format!("Echo: {}", processed_input);
         let response_bytes = Bytes::from(response.into_bytes());
-        exchange.set_output(response_bytes);
+        exchange.set_output(
+            Full::new(response_bytes)
+                .map_err(|_| unreachable!("Infallible"))
+                .boxed(),
+        );
         Ok(HandlerStatus::new(
             ExchangeState::OK | ExchangeState::EXCHANGE_COMPLETED,
         ))
@@ -133,12 +156,10 @@ impl Handler<Bytes, Bytes, Parts> for EchoHandler {
     }
 }
 
-// TODO - Make PathRouter easier to configure and use.
-// Create a router with appropriate handlers and routes using the corrected PathRouter structure
+// Updated function with simplified return type and new constructor
 #[rustfmt::skip]
-fn create_router()
--> RequestRouter<Request<Incoming>, Bytes, Bytes, Parts, HyperExchangeFactory, DefaultExecutor> {
-    let mut handler_registry = idemio::handler::registry::HandlerRegistry::new();
+fn create_router() -> HyperRouter {
+    let mut handler_registry = HandlerRegistry::new();
 
     // Register greeting handler
     let greeting_handler_id = HandlerId::new("greeting_handler");
@@ -198,27 +219,26 @@ fn create_router()
         .unwrap();
 
     let router_config = SingleServiceConfigBuilder::new()
-        .start_route("/echo")
+        .route("/echo")
             .post()
-                .with_request_handler("idempotent_logging_handler")
-                .with_termination_handler("echo_handler")
+                .request_handler("idempotent_logging_handler")
+                .termination_handler("echo_handler")
             .end_method()
         .end_route()
-        .start_route("/greet")
+        .route("/greet")
             .get()
-                .with_request_chain("idempotent_logging_handler")
-                .with_termination_handler("greeting_handler")
+                .request_handler("idempotent_logging_handler")
+                .termination_handler("greeting_handler")
             .end_method()
         .end_route()
-        .start_route("/api/*")
+        .route("/api/*")
             .get()
-                .with_request_handler("idempotent_logging_handler")
-                .with_termination_handler("greeting_handler")
+                .request_handler("idempotent_logging_handler")
+                .termination_handler("greeting_handler")
             .end_method()
         .end_route()
         .build();
-
-    // Create the router
+    // Create the router using the new constructor signature
     RequestRouter::new(
         &handler_registry,
         &router_config,
@@ -230,17 +250,8 @@ fn create_router()
 
 async fn handle_request(
     req: Request<Incoming>,
-    router: Arc<
-        RequestRouter<
-            Request<Incoming>,
-            Bytes,
-            Bytes,
-            Parts,
-            HyperExchangeFactory,
-            DefaultExecutor,
-        >,
-    >,
-) -> Result<Response<BoxBody<Bytes, Infallible>>, Box<dyn std::error::Error + Send + Sync>> {
+    router: Arc<HyperRouter>,
+) -> Result<Response<BoxBody<Bytes, std::io::Error>>, Box<dyn std::error::Error + Send + Sync>> {
     // Extract the path for logging
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
@@ -249,12 +260,11 @@ async fn handle_request(
     // Use the router to handle the request
     match router.route(req).await {
         Ok(response_body) => {
-            let body = Full::new(response_body).boxed();
+            let body = response_body;
             // Create a successful HTTP response
             Ok(Response::builder()
                 .status(200)
                 .header("Content-Type", "text/plain")
-                .header("X-Powered-By", "Idemio")
                 .body(body)?)
         }
         Err(e) => {
@@ -271,7 +281,11 @@ async fn handle_request(
             Ok(Response::builder()
                 .status(status_code)
                 .header("Content-Type", "text/plain")
-                .body(Full::new(Bytes::from(format!("{}: {}", error_message, e))).boxed())?)
+                .body(
+                    Full::new(Bytes::from(format!("{}: {}", error_message, e)))
+                        .map_err(|_| unreachable!("Infallible"))
+                        .boxed(),
+                )?)
         }
     }
 }
@@ -305,7 +319,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let router_clone = router.clone();
         tokio::task::spawn(async move {
             // Handle the connection from the client using HTTP/2 with an executor
-            if let Err(err) = http2::Builder::new(TokioExecutor::new())
+            if let Err(err) = http1::Builder::new()
                 .serve_connection(
                     io,
                     service_fn(move |req| handle_request(req, router_clone.clone())),

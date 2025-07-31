@@ -84,8 +84,10 @@ where
 pub mod hyper {
     use futures_util::StreamExt;
     use std::error::Error;
+    use std::marker::PhantomData;
     use async_trait::async_trait;
     use http_body_util::BodyExt;
+    use http_body_util::combinators::BoxBody;
     use hyper::Request;
     use crate::exchange::Exchange;
     use crate::router::RouterError;
@@ -108,7 +110,7 @@ pub mod hyper {
     /// * `Parts` - HTTP request metadata (headers, method, URI, etc.)
     ///
     /// # Examples
-    /// See `hyper_example.rs` for an example of how to use this factory.
+    /// See `example` for an example of how to use this factory.
     ///
     /// # Behavior
     ///
@@ -121,7 +123,7 @@ pub mod hyper {
     impl ExchangeFactory<
         Request<Incoming>,
         Bytes,
-        Bytes,
+        BoxBody<Bytes, std::io::Error>,
         Parts
     > for HyperExchangeFactory
     {
@@ -158,7 +160,7 @@ pub mod hyper {
         ///
         /// # Returns
         ///
-        /// Returns an `Exchange<Bytes, Bytes, Parts>` configured with:
+        /// Returns an `Exchange<Bytes, BoxBody<Bytes, std::io::Error, Parts>` configured with:
         /// * HTTP request body as a byte stream with BytesCollector
         /// * HTTP request parts (headers, method, URI) as metadata
         /// * Proper initialization for HTTP request processing
@@ -172,7 +174,7 @@ pub mod hyper {
         async fn create_exchange<'req>(
             &self,
             request: Request<Incoming>,
-        ) -> Result<Exchange<'req, Bytes, Bytes, Parts>, RouterError> {
+        ) -> Result<Exchange<'req, Bytes, BoxBody<Bytes, std::io::Error>, Parts>, RouterError> {
             let mut exchange = Exchange::new();
             let (parts, body) = request.into_parts();
 

@@ -52,19 +52,19 @@ fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathRouter<(), 
         match i % 4 {
             0 => {
                 builder = builder
-                    .start_route(path)
+                    .route(path)
                     .get()
-                    .with_request_handlers(&["test1", "test2", "test3"])
-                    .with_termination_handler("test4")
+                    .request_handlers(&["test1", "test2", "test3"])
+                    .termination_handler("test4")
                     .end_method()
                     .end_route();
             }
             _ => {
                 builder = builder
-                    .start_route(path)
+                    .route(path)
                     .post()
-                    .with_request_handler("test1")
-                    .with_termination_handler("test4")
+                    .request_handler("test1")
+                    .termination_handler("test4")
                     .end_method()
                     .end_route();
             }
@@ -73,11 +73,11 @@ fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathRouter<(), 
 
     // Add the wildcard route
     builder = builder
-        .start_route("/test/abc/*")
+        .route("/test/abc/*")
         .get()
-        .with_request_handlers(&["test1", "test2", "test3"])
-        .with_termination_handler("test4")
-        .with_response_handlers(&["test1", "test2", "test3"])
+        .request_handlers(&["test1", "test2", "test3"])
+        .termination_handler("test4")
+        .response_handlers(&["test1", "test2", "test3"])
         .end_method()
         .end_route();
 
