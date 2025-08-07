@@ -126,13 +126,14 @@ pub trait StreamCollector<T>: Send + Sync {
 /// as a value or streamed asynchronously.
 pub enum StreamOrValue<'a, T>
 where
+    Self: Send + Sync,
     T: Send + Sync,
 {
     /// A direct value that's immediately available.
     Value(T),
     /// A stream of values with an optional collector for combining them.
     Stream(
-        Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a>>,
+        Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send  + Sync + 'a>>,
         Option<Box<dyn StreamCollector<T> + 'a>>,
     ),
     /// A value that has been collected from a stream.
@@ -141,6 +142,7 @@ where
 
 impl<'a, T> StreamOrValue<'a, T>
 where
+    Self: Send + Sync,
     T: Send + Sync,
 {
     /// Creates a `StreamOrValue` from a direct value.
@@ -184,7 +186,7 @@ where
     /// The stream will need a collector to be provided later when collecting values.
     pub fn from_stream<S>(stream: S) -> Self
     where
-        S: Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + Sync + 'a,
     {
         Self::Stream(Box::pin(stream), None)
     }
@@ -217,7 +219,7 @@ where
         collector: Box<dyn StreamCollector<T> + 'a>,
     ) -> Self
     where
-        S: Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + Sync + 'a,
     {
         Self::Stream(Box::pin(stream), Some(collector))
     }
@@ -281,7 +283,7 @@ where
     /// immediately if any item fails.
     #[inline]
     async fn collect_stream_items(
-        stream: &mut Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a>>,
+        stream: &mut Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + Sync + 'a>>,
     ) -> Result<Vec<T>, CollectorError> {
         let mut items = Vec::new();
         while let Some(result) = stream.next().await {
@@ -439,7 +441,7 @@ where
     pub fn take_stream(
         self,
     ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + 'a>>,
+        Pin<Box<dyn Stream<Item = Result<T, Box<dyn Error + Send + Sync>>> + Send + Sync + 'a>>,
         CollectorError,
     > {
         match self {
