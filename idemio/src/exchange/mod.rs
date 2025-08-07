@@ -425,7 +425,7 @@ where
     /// into a single value.
     pub fn set_input_stream<S>(&mut self, stream: S)
     where
-        S: Stream<Item = StreamResult<I>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + Sync + 'a,
     {
         self.input = Some(StreamOrValue::from_stream(stream));
     }
@@ -450,7 +450,7 @@ where
         stream: S,
         collector: Box<dyn StreamCollector<I> + 'a>,
     ) where
-        S: Stream<Item = StreamResult<I>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + Sync + 'a,
     {
         self.input = Some(StreamOrValue::from_stream_with_collector(stream, collector));
     }
@@ -712,7 +712,7 @@ where
     /// If the input was set as a buffered value, this method will return an error.
     pub fn take_input_stream(
         &mut self,
-    ) -> Result<Pin<Box<dyn Stream<Item = StreamResult<I>> + Send + 'a>>, ExchangeError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResult<I>> + Send + Sync + 'a>>, ExchangeError> {
         match self.input.take() {
             Some(stream_or_value) => stream_or_value
                 .take_stream()
@@ -772,7 +772,7 @@ where
     /// consumed when the output is accessed. Any previously set output will be replaced.
     pub fn set_output_stream<S>(&mut self, stream: S)
     where
-        S: Stream<Item = StreamResult<O>> + Send + 'a,
+        S: Stream<Item = StreamResult<O>> + Send + Sync + 'a,
     {
         self.output = Some(StreamOrValue::from_stream(stream));
     }
@@ -808,7 +808,7 @@ where
         stream: S,
         collector: Box<dyn StreamCollector<O> + 'a>,
     ) where
-        S: Stream<Item = StreamResult<O>> + Send + 'a,
+        S: Stream<Item = StreamResult<O>> + Send + Sync + 'a,
     {
         self.output = Some(StreamOrValue::from_stream_with_collector(stream, collector));
     }
@@ -1149,7 +1149,7 @@ where
         &mut self,
     ) -> Result<
         Pin<
-            Box<dyn Stream<Item = StreamResult<O>> + Send + 'a>,
+            Box<dyn Stream<Item = StreamResult<O>> + Send + Sync + 'a>,
         >,
         ExchangeError,
     > {
@@ -1207,12 +1207,12 @@ where
     Buffered(I),
     Streaming(
         Pin<
-            Box<dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>,
+            Box<dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + Sync + 'a>,
         >,
     ),
     StreamingWithCollector {
         stream: Pin<
-            Box<dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a>,
+            Box<dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + Sync + 'a>,
         >,
         collector: Box<dyn StreamCollector<I> + 'a>,
     },
@@ -1342,7 +1342,7 @@ where
     /// previously configured input type.
     pub fn with_streaming_input<S>(mut self, stream: S) -> Self
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + Sync + 'a,
     {
         self.input_config = InputConfig::Streaming(Box::pin(stream));
         self
@@ -1379,7 +1379,7 @@ where
         collector: Box<dyn StreamCollector<I> + 'a>,
     ) -> Self
     where
-        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + 'a,
+        S: Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + Sync + 'a,
     {
         self.input_config = InputConfig::StreamingWithCollector {
             stream: Box::pin(stream),
@@ -1406,7 +1406,7 @@ where
     /// Configures the exchange to support streaming output.
     ///
     /// # Returns
-    /// Returns `Self` with streaming output configuration applied.
+    /// `Self` with streaming output configuration applied.
     ///
     /// # Behavior
     /// The exchange will be configured to handle output as streams rather than buffered values.
@@ -1420,7 +1420,7 @@ where
     /// Builds the configured exchange instance.
     ///
     /// # Returns
-    /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
+    /// `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange instance
     /// - `Err(ExchangeBuilderError)` if the configuration is invalid
     ///
@@ -1568,7 +1568,7 @@ where
         input_stream: S,
     ) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = StreamResult<I>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + Sync + 'a,
     {
         Self::new()
             .with_streaming_input(input_stream)
@@ -1607,7 +1607,7 @@ where
         input_collector: Box<dyn StreamCollector<I> + 'a>,
     ) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = StreamResult<I>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + Sync + 'a,
     {
         Self::new()
             .with_streaming_input_and_collector(input_stream, input_collector)
@@ -1702,7 +1702,7 @@ where
     /// where both input and output are handled as streams.
     pub fn streaming<S>(input_stream: S) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = StreamResult<I>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + Sync + 'a,
     {
         Self::new()
             .with_streaming_input(input_stream)
@@ -1741,7 +1741,7 @@ where
         input_collector: Box<dyn StreamCollector<I> + 'a>,
     ) -> Result<Exchange<'a, I, O, M>, ExchangeBuilderError>
     where
-        S: Stream<Item = StreamResult<I>> + Send + 'a,
+        S: Stream<Item = StreamResult<I>> + Send + Sync + 'a,
     {
         Self::new()
             .with_streaming_input_and_collector(input_stream, input_collector)
@@ -1757,10 +1757,10 @@ pub struct Attachments {
 
 impl Attachments {
 
-    /// Creates a new empty attachments collection.
+    /// Creates a new empty attachments' collection.
     ///
     /// # Returns
-    /// Returns a new `Self` instance with an empty HashMap using FNV hasher.
+    /// A new `Self` instance with an empty HashMap using FNV hasher.
     ///
     /// # Behavior
     /// Initializes an empty collection optimized for storing typed key-value pairs
@@ -1771,7 +1771,7 @@ impl Attachments {
         }
     }
 
-    /// Adds a typed value to the attachments collection.
+    /// Adds a typed value to the attachment collection.
     ///
     /// # Parameters
     /// - `key`: A string-like key that can be converted via `AsRef<str>`

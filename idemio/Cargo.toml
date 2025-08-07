@@ -44,10 +44,16 @@ harness = false
 
 [[example]]
 name = "buffered_hyper_example"
-path = "examples/buffered/example.rs"
+path = "examples/buffered/main.rs"
 required-features = ["hyper"]
 
 [[example]]
 name = "file_hyper_example"
-path = "examples/file/example.rs"
+path = "examples/file/main.rs"
+required-features = ["hyper"]
+
+
+[[example]]
+name = "generic_streams_example"
+path = "examples/generic_streams/main.rs"
 required-features = ["hyper"]
