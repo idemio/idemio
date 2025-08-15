@@ -1,8 +1,9 @@
 use crate::exchange::{Exchange, ExchangeError};
 use crate::router::route::LoadedChain;
+use crate::status::ExchangeState;
 use async_trait::async_trait;
-use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+use thiserror::Error;
 
 /// A trait for executing handler chains in an asynchronous request/response processing system.
 ///
@@ -38,13 +39,12 @@ where
     /// use std::sync::Arc;
     /// use idemio::exchange::Exchange;
     /// use idemio::router::executor::{DefaultExecutor, ExecutorError, HandlerExecutor};
-    ///
     /// use idemio::router::route::LoadedChain;
     ///
     /// async fn process_request<In, Out, Meta>(
     ///     executor: &DefaultExecutor,
     ///     chain: Arc<LoadedChain<In, Out, Meta>>,
-    ///     mut exchange: Exchange<In, Out, Meta>
+    ///     mut exchange: Exchange<'_, In, Out, Meta>
     /// ) -> Result<Out, ExecutorError>
     /// where
     ///     In: Send + Sync,
@@ -68,7 +68,7 @@ where
     /// - `completed`: Stop execution and return the output
     /// - `error`: Stop execution with an error and return the output
     ///
-    /// Any unknown status codes will result in an `ExecutorError::FailedToExecute`.
+    /// Any unknown status codes will result in an `ExecutorError::State`.
     async fn execute_handlers(
         &self,
         executables: Arc<LoadedChain<In, Out, Meta>>,
@@ -76,10 +76,24 @@ where
     ) -> Result<Out, ExecutorError>;
 
     /// Extracts the output from an exchange after handler execution.
+    ///
+    /// This is a default implementation that attempts to take the output from the exchange.
+    /// If the extraction fails, it returns an `ExecutorError::Output` with the underlying
+    /// exchange error as the source.
+    ///
+    /// # Parameters
+    ///
+    /// * `exchange` - A mutable reference to the exchange from which to extract the output
+    ///
+    /// # Returns
+    ///
+    /// Returns `Result<Out, ExecutorError>` where:
+    /// * `Ok(Out)` - The extracted output from the exchange
+    /// * `Err(ExecutorError::Output)` - An error occurred while extracting the output
     async fn return_output(exchange: &mut Exchange<In, Out, Meta>) -> Result<Out, ExecutorError> {
         match exchange.take_output().await {
             Ok(out) => Ok(out),
-            Err(e) => Err(ExecutorError::exchange_error(e)),
+            Err(e) => Err(ExecutorError::output_read_error(e)),
         }
     }
 }
@@ -88,58 +102,61 @@ where
 ///
 /// This enum encapsulates various failure modes that can happen when executing
 /// handler chains, providing detailed error information for debugging and handling.
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum ExecutorError {
-    /// Indicates that handler execution failed for a general reason.
+    /// Indicates that the exchange is in an unknown or unexpected state.
     ///
-    /// Contains a descriptive message explaining why the execution failed.
-    FailedToExecute(String),
+    /// This error occurs when a handler returns a status code that is not recognized
+    /// or expected by the executor, preventing normal processing flow continuation.
+    #[error("Exchange is in an unknown state: {state}")]
+    State { state: ExchangeState },
 
-    /// Indicates that a handler exceeded its execution timeout.
+    /// Indicates a failure to extract output from the exchange.
     ///
-    /// Contains a descriptive message about which handler timed out and any relevant details.
-    HandlerTimeout(String),
-
-    /// Wraps an error that occurred within the exchange system.
-    ///
-    /// This variant encapsulates `ExchangeError` instances that can occur during
-    /// exchange operations like reading input, writing output, or managing metadata.
-    ExchangeError(ExchangeError),
+    /// This error occurs when the executor cannot successfully retrieve the output
+    /// from the exchange after handler processing, typically due to the output
+    /// not being set or being in an invalid state.
+    #[error("Failed to extract output from exchange.")]
+    Output {
+        #[source]
+        source: ExchangeError,
+    },
 }
 
 impl ExecutorError {
-    /// Creates a new `FailedToExecute` error with the provided message.
-    pub fn failed_to_execute(msg: impl Into<String>) -> Self {
-        ExecutorError::FailedToExecute(msg.into())
+    /// Creates a new `Output` error with the provided exchange error as the source.
+    ///
+    /// # Parameters
+    ///
+    /// * `err` - The underlying `ExchangeError` that caused the output extraction failure
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `ExecutorError::Output` variant containing the source error.
+    pub fn output_read_error(err: ExchangeError) -> Self {
+        ExecutorError::Output { source: err }
     }
 
-    /// Creates a new `HandlerTimeout` error with the provided message.
-    pub fn handler_timeout(msg: impl Into<String>) -> Self {
-        ExecutorError::HandlerTimeout(msg.into())
-    }
-
-    /// Creates a new `ExchangeError` by wrapping an existing `ExchangeError`.
-    pub fn exchange_error(err: ExchangeError) -> Self {
-        ExecutorError::ExchangeError(err)
+    /// Creates a new `State` error for an unknown exchange state.
+    ///
+    /// # Parameters
+    ///
+    /// * `state` - The unknown `ExchangeState` that was encountered
+    ///
+    /// # Returns
+    ///
+    /// Returns a new `ExecutorError::State` variant containing the problematic state.
+    pub fn unknown_exchange_state(state: ExchangeState) -> Self {
+        ExecutorError::State { state }
     }
 }
-
-impl Display for ExecutorError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExecutorError::FailedToExecute(msg) => write!(f, "Failed to execute: {}", msg),
-            ExecutorError::HandlerTimeout(msg) => write!(f, "Handler timeout: {}", msg),
-            ExecutorError::ExchangeError(err) => write!(f, "{}", err),
-        }
-    }
-}
-
-impl std::error::Error for ExecutorError {}
 
 /// A default implementation of the `HandlerExecutor` trait.
 ///
 /// This struct provides a standard execution strategy for handler chains,
 /// following the typical request → termination → response handler flow.
+/// It implements a sequential execution model where handlers are processed
+/// in order and can control the flow through their return status codes.
 pub struct DefaultExecutor;
 
 #[async_trait]
@@ -170,7 +187,7 @@ where
     ///
     /// async fn process_with_default_executor<In, Out, Meta>(
     ///     chain: Arc<LoadedChain<In, Out, Meta>>,
-    ///     mut exchange: Exchange<In, Out, Meta>
+    ///     mut exchange: Exchange<'_, In, Out, Meta>
     /// ) -> Result<Out, ExecutorError>
     /// where
     ///     In: Send + Sync,
@@ -189,56 +206,55 @@ where
     /// 1. **Request Handlers**: Executes each request handler in order. If a handler returns:
     ///    - `in_flight`: Continues to the next handler
     ///    - `completed` or `error`: Immediately returns the output
-    ///    - Unknown state: Returns an error
+    ///    - Unknown state: Returns an `ExecutorError::State`
     ///
     /// 2. **Termination Handler**: Executes the single termination handler. If it returns:
     ///    - `completed` or `error`: Returns the output
     ///    - `in_flight`: Continues to response handlers
-    ///    - Unknown state: Returns an error
+    ///    - Unknown state: Returns an `ExecutorError::State`
     ///
     /// 3. **Response Handlers**: Executes each response handler in order with the same
     ///    status handling as request handlers
     ///
-    /// 4. **Final Output**: If all handlers complete with `in_flight` status, extracts
+    /// 4. **Final Output**: If all handlers are complete with `in_flight` status, extracts
     ///    the final output from the exchange
     ///
-    /// Handler execution uses `.unwrap()` on the result because handlers are expected
-    /// to return `Infallible` results, making unwrap safe in this context.
+    /// # Error Handling
     ///
-    /// Any errors encountered during output extraction are converted to `ExecutorError::ExchangeError`.
+    /// Handler execution uses `.unwrap()` on the result because handlers are expected
+    /// to return `Infallible` results, making unwrapping safe in this context.
+    ///
+    /// Any errors encountered during output extraction are converted to `ExecutorError::Output`
+    /// with the underlying `ExchangeError` as the source.
     async fn execute_handlers(
         &self,
         executables: Arc<LoadedChain<In, Out, Meta>>,
         exchange: &mut Exchange<In, Out, Meta>,
     ) -> Result<Out, ExecutorError> {
+        // Execute request handlers in sequence
         let request_handlers = executables.request_handlers();
         for handler in request_handlers {
-            // Handler result is Infallible, so unwrap is safe
             let status = handler.exec(exchange).await.unwrap();
             if status.code.is_in_flight() {
                 continue;
             } else if status.code.is_completed() || status.code.is_error() {
                 return Ok(Self::return_output(exchange).await?);
             } else {
-                return Err(ExecutorError::failed_to_execute(format!(
-                    "Unknown state '{:b}' returned from handler",
-                    status.code
-                )));
+                return Err(ExecutorError::unknown_exchange_state(status.code));
             }
         }
 
+        // Execute termination handler
         let termination_handler = executables.termination_handler();
         // Handler result is Infallible, so unwrap is safe
         let status = termination_handler.exec(exchange).await.unwrap();
         if status.code.is_completed() || status.code.is_error() {
             return Ok(Self::return_output(exchange).await?);
         } else if !status.code.is_in_flight() {
-            return Err(ExecutorError::failed_to_execute(format!(
-                "Unknown state '{:b}' returned from handler",
-                status.code
-            )));
+            return Err(ExecutorError::unknown_exchange_state(status.code));
         }
 
+        // Execute response handlers in sequence
         let response_handlers = executables.response_handlers();
         for handler in response_handlers {
             // Handler result is Infallible, so unwrap is safe
@@ -248,16 +264,14 @@ where
             } else if status.code.is_completed() || status.code.is_error() {
                 return Ok(Self::return_output(exchange).await?);
             } else {
-                return Err(ExecutorError::failed_to_execute(format!(
-                    "Unknown state '{:b}' returned from handler",
-                    status.code
-                )));
+                return Err(ExecutorError::unknown_exchange_state(status.code));
             }
         }
 
-        match exchange.take_output().await {
-            Ok(out) => Ok(out),
-            Err(e) => Err(ExecutorError::exchange_error(e)),
-        }
+        // Final output extraction if all handlers returned in_flight
+        exchange
+            .take_output()
+            .await
+            .map_err(|e| ExecutorError::output_read_error(e))
     }
 }

@@ -1,4 +1,5 @@
 pub mod registry;
+
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -42,25 +43,5 @@ impl HandlerId {
 impl Display for HandlerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.handler_hash)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ChainId {
-    chain_hash: u64,
-}
-
-impl ChainId {
-    pub fn new(id: impl Into<String>) -> Self {
-        let mut hasher = fnv::FnvHasher::default();
-        id.into().hash(&mut hasher);
-        let hash = hasher.finish();
-        Self { chain_hash: hash }
-    }
-}
-
-impl Display for ChainId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ChainId({})", self.chain_hash)
     }
 }

@@ -271,9 +271,8 @@ async fn handle_request(
             // Handle routing errors
             println!("Error handling request: {}", e);
             let (status_code, error_message) = match e {
-                RouterError::RouteNotFound(_) => (404, "Route not found"),
-                RouterError::MethodNotSupported(_) => (405, "Method not allowed"),
-                RouterError::ExchangeCreationFailed(_) => (400, "Bad request"),
+                RouterError::MissingRoute{..} => (404, "Route not found"),
+                RouterError::InvalidExchange{..} => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
 
