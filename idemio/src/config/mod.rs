@@ -1,7 +1,8 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::fs::File;
-use std::path::MAIN_SEPARATOR_STR;
+use std::path::Path;
+use thiserror::Error;
 
 #[derive(Debug)]
 pub struct HandlerConfig<C>
@@ -178,7 +179,7 @@ pub trait ConfigProvider<C>
 where
     C: Default + DeserializeOwned,
 {
-    fn load(&self) -> Result<C, ()>;
+    fn load(&self) -> Result<C, ConfigProviderError>;
 }
 
 pub struct DefaultConfigProvider;
@@ -187,7 +188,7 @@ impl<C> ConfigProvider<C> for DefaultConfigProvider
 where
     C: Default + DeserializeOwned,
 {
-    fn load(&self) -> Result<C, ()> {
+    fn load(&self) -> Result<C, ConfigProviderError> {
         Ok(C::default())
     }
 }
@@ -201,13 +202,16 @@ impl<C> ConfigProvider<C> for FileConfigProvider
 where
     C: Default + DeserializeOwned,
 {
-    fn load(&self) -> Result<C, ()> {
-        let config_path = format!(
-            "{}{}{}",
-            self.base_path, MAIN_SEPARATOR_STR, self.config_name
-        );
-        let file = File::open(config_path).map_err(|_| ())?;
-        serde_json::from_reader(file).map_err(|_| ())
+    fn load(&self) -> Result<C, ConfigProviderError> {
+        let config_path = Path::new(&self.base_path).join(&self.config_name);
+        let file = File::open(config_path).map_err(|e| {
+            let msg = format!("Could not open config file: {}", e);
+            ConfigProviderError::load_error(msg)
+        })?;
+        serde_json::from_reader(file).map_err(|e| {
+            let msg = format!("Could not load config file from reader: {}", e);
+            ConfigProviderError::load_error(msg)
+        })
     }
 }
 
@@ -219,7 +223,7 @@ impl<C> ConfigProvider<C> for ProgrammaticConfigProvider<C>
 where
     C: Default + DeserializeOwned + Clone + Serialize,
 {
-    fn load(&self) -> Result<C, ()> {
+    fn load(&self) -> Result<C, ConfigProviderError> {
         Ok(self.config.clone())
     }
 }
@@ -227,4 +231,19 @@ where
 pub enum ProviderType {
     File,
     Default,
+}
+
+#[derive(Error, Debug)]
+pub enum ConfigProviderError {
+    #[error("Could not load config file. {message}")]
+    Load { message: String },
+}
+
+impl ConfigProviderError {
+    #[inline]
+    pub(crate) fn load_error(msg: impl Into<String>) -> Self {
+        Self::Load {
+            message: msg.into(),
+        }
+    }
 }

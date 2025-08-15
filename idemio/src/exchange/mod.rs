@@ -1,14 +1,15 @@
 pub mod collector;
 use crate::exchange::collector::CollectorError;
+use crate::exchange::collector::{StreamCollector, StreamOrValue};
 use fnv::FnvHasher;
+use futures_util::{Stream, StreamExt, pin_mut};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use crate::exchange::collector::{StreamCollector, StreamOrValue};
-use futures_util::{Stream, StreamExt, pin_mut};
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::pin::Pin;
+use thiserror::Error;
 use uuid::Uuid;
 type StreamResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -264,7 +265,7 @@ where
     /// a descriptive message.
     pub fn metadata(&self) -> Result<&M, ExchangeError> {
         match &self.metadata {
-            None => Err(ExchangeError::metadata_read_error(
+            None => Err(ExchangeError::read_error(
                 &self.uuid,
                 "Metadata has not been set",
             )),
@@ -489,7 +490,7 @@ where
             match result {
                 Ok(item) => items.push(item),
                 Err(e) => {
-                    return Err(ExchangeError::input_read_error(
+                    return Err(ExchangeError::read_error(
                         &self.uuid,
                         &format!("Stream error: {}", e),
                     ));
@@ -535,7 +536,7 @@ where
                 .collect(items)
                 .map_err(|e| ExchangeError::exchange_collector_error(&uuid, e))
         })
-            .await
+        .await
     }
 
     /// Retrieves a reference to the input data, collecting from stream if necessary.
@@ -555,10 +556,7 @@ where
                 .get_value()
                 .await
                 .map_err(|e| ExchangeError::exchange_collector_error(&self.uuid, e)),
-            None => Err(ExchangeError::input_read_error(
-                &self.uuid,
-                "No input available",
-            )),
+            None => Err(ExchangeError::read_error(&self.uuid, "No input available")),
         }
     }
 
@@ -588,10 +586,7 @@ where
                 .get_value_with_collector(collector)
                 .await
                 .map_err(|e| ExchangeError::exchange_collector_error(&self.uuid, e)),
-            None => Err(ExchangeError::input_read_error(
-                &self.uuid,
-                "No input available",
-            )),
+            None => Err(ExchangeError::read_error(&self.uuid, "No input available")),
         }
     }
 
@@ -601,20 +596,6 @@ where
     /// Returns `Result<I, ExchangeError>` where:
     /// - `Ok(I)` contains the owned input data
     /// - `Err(ExchangeError)` if no input is available to take or if collection fails
-    ///
-    /// # Examples
-    /// ```rust
-    ///
-    ///  use idemio::exchange::Exchange;
-    ///  async move {
-    ///     let mut exchange: Exchange<String, Vec<u8>, i32> = Exchange::new();
-    ///     exchange.set_input("data to take".to_string());
-    ///     let owned_input = exchange.take_input().await?;
-    ///     assert_eq!(owned_input, "data to take");
-    ///     // Input is no longer available in the exchange
-    ///     assert!(exchange.input().await.is_err());
-    /// }
-    /// ```
     ///
     /// # Behavior
     /// This method removes the input from the exchange and returns ownership to the caller.
@@ -633,7 +614,7 @@ where
                 }
                 Ok(value)
             }
-            None => Err(ExchangeError::input_take_error(
+            None => Err(ExchangeError::take_error(
                 &self.uuid,
                 "No input available to take",
             )),
@@ -673,7 +654,7 @@ where
                 }
                 Ok(value)
             }
-            None => Err(ExchangeError::input_take_error(
+            None => Err(ExchangeError::take_error(
                 &self.uuid,
                 "No input available to take",
             )),
@@ -687,43 +668,24 @@ where
     /// - `Ok(stream)` contains the owned input stream
     /// - `Err(ExchangeError)` if no input stream is available or if the input is not a stream
     ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::StreamExt;
-    /// use idemio::exchange::Exchange;
-    /// async move {
-    ///     let mut exchange: Exchange<String, Vec<u8>, i32> = Exchange::new();
-    ///
-    ///     // Assume input was set as a stream
-    ///     let mut input_stream = exchange.take_input_stream()?;
-    ///     while let Some(item_result) = input_stream.next().await {
-    ///         match item_result {
-    ///             Ok(item) => println!("Stream item: {}", item),
-    ///             Err(e) => eprintln!("Stream error: {}", e),
-    ///         }
-    ///     }
-    /// }
-    ///
-    /// ```
-    ///
     /// # Behavior
     /// This method is only applicable when the input was set as a stream. It removes the stream
     /// from the exchange and returns ownership to the caller, allowing direct stream processing.
     /// If the input was set as a buffered value, this method will return an error.
     pub fn take_input_stream(
         &mut self,
-    ) -> Result<Pin<Box<dyn Stream<Item = StreamResult<I>> + Send + Sync + 'a>>, ExchangeError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResult<I>> + Send + Sync + 'a>>, ExchangeError>
+    {
         match self.input.take() {
             Some(stream_or_value) => stream_or_value
                 .take_stream()
                 .map_err(|e| ExchangeError::exchange_collector_error(&self.uuid, e)),
-            None => Err(ExchangeError::input_take_error(
+            None => Err(ExchangeError::take_error(
                 &self.uuid,
                 "No input stream available to take",
             )),
         }
     }
-
 
     /// Sets the output value for the exchange.
     ///
@@ -747,7 +709,6 @@ where
     pub fn set_output(&mut self, output: O) {
         self.output = Some(StreamOrValue::Value(output));
     }
-
 
     /// Sets the output as a stream for the exchange.
     ///
@@ -777,7 +738,6 @@ where
         self.output = Some(StreamOrValue::from_stream(stream));
     }
 
-
     /// Sets the output as a stream with a custom collector for the exchange.
     ///
     /// # Parameters
@@ -786,18 +746,6 @@ where
     ///
     /// # Returns
     /// This function returns `()` (unit type).
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::collector::VecCollector;
-    /// use idemio::exchange::Exchange;
-    ///
-    /// let mut exchange: Exchange<String, Vec<i32>, ()> = Exchange::new();
-    /// let output_stream = stream::iter(vec![Ok(1), Ok(2), Ok(3)]);
-    /// let collector = Box::new(VecCollector::new());
-    /// exchange.set_output_stream_with_collector(output_stream, collector);
-    /// ```
     ///
     /// # Behavior
     /// This method configures the exchange to use streaming output with a specific collector.
@@ -812,7 +760,6 @@ where
     {
         self.output = Some(StreamOrValue::from_stream_with_collector(stream, collector));
     }
-
 
     /// Processes an output stream using a provided processor function and stores the result.
     ///
@@ -830,7 +777,7 @@ where
     /// use futures_util::stream;
     /// use idemio::exchange::{Exchange, ExchangeError};
     ///
-    /// async {
+    /// let res = async {
     ///     let mut exchange: Exchange<String, i32, ()> = Exchange::new();
     ///     let output_stream = stream::iter(vec![Ok(1), Ok(2), Ok(3)]);
     ///     
@@ -839,7 +786,7 @@ where
     ///     }).await;
     ///     
     ///     assert!(result.is_ok());
-    /// }
+    /// };
     /// ```
     ///
     /// # Behavior
@@ -861,7 +808,7 @@ where
             match result {
                 Ok(item) => items.push(item),
                 Err(e) => {
-                    return Err(ExchangeError::output_read_error(
+                    return Err(ExchangeError::read_error(
                         &self.uuid,
                         &format!("Stream error: {}", e),
                     ));
@@ -873,7 +820,6 @@ where
         Ok(())
     }
 
-
     /// Processes an output stream using a provided collector and stores the result.
     ///
     /// # Parameters
@@ -884,20 +830,6 @@ where
     /// Returns `Result<(), ExchangeError>` where:
     /// - `Ok(())` indicates successful processing and storage of the result
     /// - `Err(ExchangeError)` if stream processing fails or the collector returns an error
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::collector::VecCollector;
-    /// use idemio::exchange::Exchange;
-    ///
-    /// async {
-    ///     let mut exchange: Exchange<String, Vec<i32>, ()> = Exchange::new();
-    ///     let output_stream = stream::iter(vec![Ok(1), Ok(2), Ok(3)]);
-    ///     let result = exchange.process_output_stream_with_collector(output_stream, VecCollector::new()).await;
-    ///     assert!(result.is_ok());
-    /// }
-    /// ```
     ///
     /// # Behavior
     /// This method is a convenience wrapper around `process_output_stream` that uses a collector
@@ -918,9 +850,8 @@ where
                 .collect(items)
                 .map_err(|e| ExchangeError::exchange_collector_error(&uuid, e))
         })
-            .await
+        .await
     }
-
 
     /// Gets a reference to the output value, collecting from stream if necessary.
     ///
@@ -928,19 +859,6 @@ where
     /// Returns `Result<&O, ExchangeError>` where:
     /// - `Ok(&O)` contains a reference to the output value
     /// - `Err(ExchangeError)` if no output is available or stream collection fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::Exchange;
-    ///
-    /// async {
-    ///     let mut exchange: Exchange<String, i32, ()> = Exchange::new();
-    ///     exchange.set_output(42);
-    ///     
-    ///     let output = exchange.output().await?;
-    ///     assert_eq!(*output, 42);
-    /// }
-    /// ```
     ///
     /// # Behavior
     /// If the output is stored as a buffered value, returns a reference immediately.
@@ -952,14 +870,9 @@ where
                 .get_value()
                 .await
                 .map_err(|e| ExchangeError::exchange_collector_error(&self.uuid, e)),
-            None => Err(ExchangeError::output_read_error(
-                &self.uuid,
-                "No output available",
-            )),
+            None => Err(ExchangeError::read_error(&self.uuid, "No output available")),
         }
     }
-
-
 
     /// Gets a reference to the output value using a specific collector for stream processing.
     ///
@@ -967,26 +880,9 @@ where
     /// - `collector`: A collector that implements `StreamCollector<O>` for processing streams
     ///
     /// # Returns
-    /// Returns `Result<&O, ExchangeError>` where:
+    /// `Result<&O, ExchangeError>` where:
     /// - `Ok(&O)` contains a reference to the output value
     /// - `Err(ExchangeError)` if no output is available or collection fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::collector::VecCollector;
-    /// use idemio::exchange::Exchange;
-    ///
-    /// async {
-    ///     let mut exchange: Exchange<String, Vec<i32>, ()> = Exchange::new();
-    ///     let output_stream = stream::iter(vec![Ok(1), Ok(2), Ok(3)]);
-    ///     exchange.set_output_stream(output_stream);
-    ///     
-    ///     let collector = VecCollector::new();
-    ///     let output = exchange.output_with_collector(collector).await?;
-    ///     assert_eq!(*output, vec![1, 2, 3]);
-    /// }
-    /// ```
     ///
     /// # Behavior
     /// This method allows specifying a custom collector for stream processing, overriding
@@ -1001,14 +897,9 @@ where
                 .get_value_with_collector(collector)
                 .await
                 .map_err(|e| ExchangeError::exchange_collector_error(&self.uuid, e)),
-            None => Err(ExchangeError::output_read_error(
-                &self.uuid,
-                "No output available",
-            )),
+            None => Err(ExchangeError::read_error(&self.uuid, "No output available")),
         }
     }
-
-
 
     /// Takes ownership of the output value, removing it from the exchange and executing callbacks.
     ///
@@ -1016,22 +907,6 @@ where
     /// Returns `Result<O, ExchangeError>` where:
     /// - `Ok(O)` contains the owned output value
     /// - `Err(ExchangeError)` if no output is available or collection fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::Exchange;
-    ///
-    /// async {
-    ///     let mut exchange: Exchange<String, i32, ()> = Exchange::new();
-    ///     exchange.set_output(42);
-    ///     
-    ///     let output = exchange.take_output().await?;
-    ///     assert_eq!(output, 42);
-    ///     
-    ///     // Output is no longer available in the exchange
-    ///     assert!(exchange.take_output().await.is_err());
-    /// }
-    /// ```
     ///
     /// # Behavior
     /// This method removes the output from the exchange and returns ownership to the caller.
@@ -1051,13 +926,12 @@ where
                 }
                 Ok(value)
             }
-            None => Err(ExchangeError::output_take_error(
+            None => Err(ExchangeError::take_error(
                 &self.uuid,
                 "No output available to take",
             )),
         }
     }
-
 
     /// Takes ownership of the output value using a specific collector, removing it from the exchange.
     ///
@@ -1068,23 +942,6 @@ where
     /// Returns `Result<O, ExchangeError>` where:
     /// - `Ok(O)` contains the owned output value
     /// - `Err(ExchangeError)` if no output is available or collection fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::collector::VecCollector;
-    /// use idemio::exchange::Exchange;
-    ///
-    /// async {
-    ///     let mut exchange: Exchange<String, Vec<i32>, ()> = Exchange::new();
-    ///     let output_stream = stream::iter(vec![Ok(1), Ok(2), Ok(3)]);
-    ///     exchange.set_output_stream(output_stream);
-    ///     
-    ///     let collector = VecCollector::new();
-    ///     let output = exchange.take_output_with_collector(collector).await?;
-    ///     assert_eq!(output, vec![1, 2, 3]);
-    /// }
-    /// ```
     ///
     /// # Behavior
     /// Similar to `take_output`, but allows specifying a custom collector for stream processing.
@@ -1106,13 +963,12 @@ where
                 }
                 Ok(value)
             }
-            None => Err(ExchangeError::output_take_error(
+            None => Err(ExchangeError::take_error(
                 &self.uuid,
                 "No output available to take",
             )),
         }
     }
-
 
     /// Takes ownership of the output as a stream, removing it from the exchange.
     ///
@@ -1121,49 +977,24 @@ where
     /// - `Ok(stream)` contains the owned output stream
     /// - `Err(ExchangeError)` if no output stream is available or if the output is not a stream
     ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::{stream, StreamExt};
-    /// use idemio::exchange::Exchange;
-    ///
-    /// async {
-    ///     let mut exchange: Exchange<String, i32, ()> = Exchange::new();
-    ///     let output_stream = stream::iter(vec![Ok(1), Ok(2), Ok(3)]);
-    ///     exchange.set_output_stream(output_stream);
-    ///     
-    ///     let mut taken_stream = exchange.take_output_stream()?;
-    ///     while let Some(item_result) = taken_stream.next().await {
-    ///         match item_result {
-    ///             Ok(item) => println!("Stream item: {}", item),
-    ///             Err(e) => eprintln!("Stream error: {}", e),
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    ///
     /// # Behavior
     /// This method is only applicable when the output was set as a stream. It removes the stream
     /// from the exchange and returns ownership to the caller, allowing direct stream processing.
     /// If the output was set as a buffered value, this method will return an error.
     pub fn take_output_stream(
         &mut self,
-    ) -> Result<
-        Pin<
-            Box<dyn Stream<Item = StreamResult<O>> + Send + Sync + 'a>,
-        >,
-        ExchangeError,
-    > {
+    ) -> Result<Pin<Box<dyn Stream<Item = StreamResult<O>> + Send + Sync + 'a>>, ExchangeError>
+    {
         match self.output.take() {
             Some(stream_or_value) => stream_or_value
                 .take_stream()
                 .map_err(|e| ExchangeError::exchange_collector_error(&self.uuid, e)),
-            None => Err(ExchangeError::output_take_error(
+            None => Err(ExchangeError::take_error(
                 &self.uuid,
                 "No output stream available to take",
             )),
         }
     }
-
 
     /// Checks if the exchange has input data available.
     ///
@@ -1179,7 +1010,6 @@ where
         self.input.is_some()
     }
 
-
     /// Checks if the exchange has output data available.
     ///
     /// # Returns
@@ -1193,11 +1023,7 @@ where
     pub fn has_output(&self) -> bool {
         self.output.is_some()
     }
-
 }
-
-
-
 
 pub enum InputConfig<'a, I>
 where
@@ -1207,12 +1033,22 @@ where
     Buffered(I),
     Streaming(
         Pin<
-            Box<dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + Sync + 'a>,
+            Box<
+                dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>>
+                    + Send
+                    + Sync
+                    + 'a,
+            >,
         >,
     ),
     StreamingWithCollector {
         stream: Pin<
-            Box<dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>> + Send + Sync + 'a>,
+            Box<
+                dyn Stream<Item = Result<I, Box<dyn std::error::Error + Send + Sync>>>
+                    + Send
+                    + Sync
+                    + 'a,
+            >,
         >,
         collector: Box<dyn StreamCollector<I> + 'a>,
     },
@@ -1284,7 +1120,6 @@ where
         self
     }
 
-
     /// Sets metadata for the exchange being built.
     ///
     /// # Parameters
@@ -1301,7 +1136,6 @@ where
         self
     }
 
-
     /// Configures the exchange to use buffered input.
     ///
     /// # Parameters
@@ -1317,7 +1151,6 @@ where
         self.input_config = InputConfig::Buffered(input);
         self
     }
-
 
     /// Configures the exchange to use streaming input.
     ///
@@ -1348,7 +1181,6 @@ where
         self
     }
 
-
     /// Configures the exchange to use streaming input with a custom collector.
     ///
     /// # Parameters
@@ -1357,18 +1189,6 @@ where
     ///
     /// # Returns
     /// Returns `Self` with the streaming input and collector configuration applied.
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::collector::VecCollector;
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let input_stream = stream::iter(vec![Ok("item1".to_string()), Ok("item2".to_string())]);
-    /// let collector = Box::new(VecCollector::new());
-    /// let builder: ExchangeBuilder<String, i32, ()> = ExchangeBuilder::new()
-    ///     .with_streaming_input_and_collector(input_stream, collector);
-    /// ```
     ///
     /// # Behavior
     /// The collector will be used to aggregate stream items when input is accessed as a value.
@@ -1388,7 +1208,6 @@ where
         self
     }
 
-
     /// Configures the exchange to support buffered output.
     ///
     /// # Returns
@@ -1401,7 +1220,6 @@ where
         self.output_config = OutputConfig::Buffered;
         self
     }
-
 
     /// Configures the exchange to support streaming output.
     ///
@@ -1416,23 +1234,12 @@ where
         self
     }
 
-
     /// Builds the configured exchange instance.
     ///
     /// # Returns
     /// `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange instance
     /// - `Err(ExchangeBuilderError)` if the configuration is invalid
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let exchange = ExchangeBuilder::new()
-    ///     .with_buffered_input("test".to_string())
-    ///     .with_buffered_output()
-    ///     .build()?;
-    /// ```
     ///
     /// # Behavior
     /// Validates the configuration and creates an Exchange instance. Returns an error if
@@ -1477,12 +1284,10 @@ pub enum ExchangeBuilderError {
 }
 
 impl ExchangeBuilderError {
-
     /// Creates an error for invalid input configuration.
     pub fn invalid_input_config(msg: impl Into<String>) -> Self {
         ExchangeBuilderError::InvalidInputConfig(msg.into())
     }
-
 
     /// Creates an error for invalid output configuration.
     pub fn invalid_output_config(msg: impl Into<String>) -> Self {
@@ -1511,8 +1316,6 @@ where
     O: Send + Sync,
     M: Send + Sync,
 {
-
-
     /// Creates an exchange with buffered input and output.
     ///
     /// # Parameters
@@ -1522,13 +1325,6 @@ where
     /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange with buffered I/O
     /// - `Err(ExchangeBuilderError)` if the build process fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let exchange = ExchangeBuilder::buffered("test input".to_string())?;
-    /// ```
     ///
     /// # Behavior
     /// This is a convenience method that creates an exchange with both input and output
@@ -1540,7 +1336,6 @@ where
             .build()
     }
 
-
     /// Creates an exchange with streaming input and buffered output.
     ///
     /// # Parameters
@@ -1550,15 +1345,6 @@ where
     /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange
     /// - `Err(ExchangeBuilderError)` if the build process fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let input_stream = stream::iter(vec![Ok("item1".to_string()), Ok("item2".to_string())]);
-    /// let exchange = ExchangeBuilder::streaming_request_buffered_response(input_stream)?;
-    /// ```
     ///
     /// # Behavior
     /// This convenience method creates an exchange that processes streaming input but
@@ -1576,7 +1362,6 @@ where
             .build()
     }
 
-
     /// Creates an exchange with streaming input, collector, and buffered output.
     ///
     /// # Parameters
@@ -1587,17 +1372,6 @@ where
     /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange
     /// - `Err(ExchangeBuilderError)` if the build process fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::collector::VecCollector;
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let input_stream = stream::iter(vec![Ok("item1".to_string()), Ok("item2".to_string())]);
-    /// let collector = Box::new(VecCollector::new());
-    /// let exchange = ExchangeBuilder::streaming_request_buffered_response_with_collector(input_stream, collector)?;
-    /// ```
     ///
     /// # Behavior
     /// Similar to `streaming_request_buffered_response` but allows specifying a custom
@@ -1615,7 +1389,6 @@ where
             .build()
     }
 
-
     /// Creates an exchange with buffered input and streaming output.
     ///
     /// # Parameters
@@ -1625,13 +1398,6 @@ where
     /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange
     /// - `Err(ExchangeBuilderError)` if the build process fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let exchange = ExchangeBuilder::buffered_request_streaming_response("test input".to_string())?;
-    /// ```
     ///
     /// # Behavior
     /// This convenience method creates an exchange that processes buffered input but
@@ -1646,7 +1412,6 @@ where
             .build()
     }
 
-
     /// Creates an exchange with buffered input and streaming output (with collector support).
     ///
     /// # Parameters
@@ -1656,13 +1421,6 @@ where
     /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange
     /// - `Err(ExchangeError)` if the build process fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let exchange = ExchangeBuilder::buffered_request_streaming_response_with_collector("test input".to_string())?;
-    /// ```
     ///
     /// # Behavior
     /// Similar to `buffered_request_streaming_response` but configured to support
@@ -1677,7 +1435,6 @@ where
             .build()
     }
 
-
     /// Creates an exchange with streaming input and streaming output.
     ///
     /// # Parameters
@@ -1687,15 +1444,6 @@ where
     /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange
     /// - `Err(ExchangeBuilderError)` if the build process fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let input_stream = stream::iter(vec![Ok("item1".to_string()), Ok("item2".to_string())]);
-    /// let exchange = ExchangeBuilder::streaming(input_stream)?;
-    /// ```
     ///
     /// # Behavior
     /// This convenience method creates an exchange configured for full streaming operation,
@@ -1710,7 +1458,6 @@ where
             .build()
     }
 
-
     /// Creates an exchange with streaming input/output and input collector.
     ///
     /// # Parameters
@@ -1718,20 +1465,9 @@ where
     /// - `input_collector`: A boxed collector implementing `StreamCollector<I> + 'a`
     ///
     /// # Returns
-    /// Returns `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
+    /// `Result<Exchange<'a, I, O, M>, ExchangeBuilderError>` where:
     /// - `Ok(Exchange)` contains the configured exchange
     /// - `Err(ExchangeBuilderError)` if the build process fails
-    ///
-    /// # Examples
-    /// ```rust
-    /// use futures_util::stream;
-    /// use idemio::exchange::collector::VecCollector;
-    /// use idemio::exchange::ExchangeBuilder;
-    ///
-    /// let input_stream = stream::iter(vec![Ok("item1".to_string()), Ok("item2".to_string())]);
-    /// let collector = Box::new(VecCollector::new());
-    /// let exchange = ExchangeBuilder::streaming_with_collectors(input_stream, collector)?;
-    /// ```
     ///
     /// # Behavior
     /// Creates a fully streaming exchange with a custom collector for input stream processing.
@@ -1748,7 +1484,6 @@ where
             .with_streaming_output()
             .build()
     }
-
 }
 
 pub struct Attachments {
@@ -1756,7 +1491,6 @@ pub struct Attachments {
 }
 
 impl Attachments {
-
     /// Creates a new empty attachments' collection.
     ///
     /// # Returns
@@ -1802,7 +1536,6 @@ impl Attachments {
             .insert(AttachmentKey::new(key, type_id), Box::new(value));
     }
 
-
     /// Retrieves a reference to a typed value from the attachments collection.
     ///
     /// # Parameters
@@ -1839,7 +1572,6 @@ impl Attachments {
             None
         }
     }
-
 
     /// Retrieves a mutable reference to a typed value from the attachments collection.
     ///
@@ -1879,95 +1611,68 @@ impl Attachments {
             None
         }
     }
-
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum ExchangeError {
-    ExchangeCompleted(Uuid),
-    ExchangeCollectorError(Uuid, CollectorError),
-    MetadataReadError(Uuid, String),
-    InputReadError(Uuid, String),
-    InputTakeError(Uuid, String),
-    OutputReadError(Uuid, String),
-    OutputTakeError(Uuid, String),
-    InputCallbackError(Uuid, String),
-    OutputCallbackError(Uuid, String),
+    #[error("Exchange '{uuid}' has already been completed")]
+    Completed { uuid: Uuid },
+
+    #[error("Collector error occurred for exchange '{uuid}'.")]
+    Collector {
+        uuid: Uuid,
+        #[source]
+        source: CollectorError,
+    },
+
+    #[error("Read error occurred for exchange '{uuid}'. {message}")]
+    Read { uuid: Uuid, message: String },
+
+    #[error("Take error occurred for exchange '{uuid}'. {message}")]
+    Take { uuid: Uuid, message: String },
+
+    #[error("Callback error occurred for exchange '{uuid}'. {message}")]
+    Callback { uuid: Uuid, message: String },
 }
 
 impl ExchangeError {
-    pub fn exchange_collector_error(uuid: &Uuid, err: CollectorError) -> Self {
-        ExchangeError::ExchangeCollectorError(*uuid, err)
+    #[inline]
+    pub(crate) const fn exchange_collector_error(uuid: &Uuid, err: CollectorError) -> Self {
+        ExchangeError::Collector {
+            uuid: *uuid,
+            source: err,
+        }
     }
 
-    pub fn exchange_completed(uuid: &Uuid) -> Self {
-        ExchangeError::ExchangeCompleted(*uuid)
+    #[inline]
+    pub const fn exchange_completed(uuid: &Uuid) -> Self {
+        ExchangeError::Completed { uuid: *uuid }
     }
 
-    pub fn metadata_read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
-        ExchangeError::MetadataReadError(*uuid, msg.into())
+    #[inline]
+    pub fn read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::Read {
+            uuid: *uuid,
+            message: msg.into(),
+        }
     }
 
-    pub fn input_read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
-        ExchangeError::InputReadError(*uuid, msg.into())
+    #[inline]
+    pub(crate) fn take_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::Take {
+            uuid: *uuid,
+            message: msg.into(),
+        }
     }
 
-    pub fn input_take_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
-        ExchangeError::InputTakeError(*uuid, msg.into())
-    }
-
-    pub fn output_read_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
-        ExchangeError::OutputReadError(*uuid, msg.into())
-    }
-
-    pub fn output_take_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
-        ExchangeError::OutputTakeError(*uuid, msg.into())
-    }
-
-    pub fn input_callback_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
-        ExchangeError::InputCallbackError(*uuid, msg.into())
-    }
-
-    pub fn output_callback_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
-        ExchangeError::OutputCallbackError(*uuid, msg.into())
-    }
-}
-
-impl Display for ExchangeError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExchangeError::ExchangeCompleted(uuid) => {
-                write!(f, "{} Exchange has already been completed", uuid)
-            }
-            ExchangeError::MetadataReadError(uuid, msg) => {
-                write!(f, "{} Failed to read metadata: {}", uuid, msg)
-            }
-            ExchangeError::InputReadError(uuid, msg) => {
-                write!(f, "{} Failed to read input: {}", uuid, msg)
-            }
-            ExchangeError::InputTakeError(uuid, msg) => {
-                write!(f, "{} Failed to consume input: {}", uuid, msg)
-            }
-            ExchangeError::OutputReadError(uuid, msg) => {
-                write!(f, "{} Failed to read output: {}", uuid, msg)
-            }
-            ExchangeError::OutputTakeError(uuid, msg) => {
-                write!(f, "{} Failed to consume output: {}", uuid, msg)
-            }
-            ExchangeError::InputCallbackError(uuid, msg) => {
-                write!(f, "{} Failed to invoke input callback: {}", uuid, msg)
-            }
-            ExchangeError::OutputCallbackError(uuid, msg) => {
-                write!(f, "{} Failed to invoke output callback: {}", uuid, msg)
-            }
-            ExchangeError::ExchangeCollectorError(uuid, err) => {
-                write!(f, "{} Exchange collector error: {}", uuid, err)
-            }
+    #[inline]
+    pub(crate) fn callback_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+        ExchangeError::Callback {
+            uuid: *uuid,
+            message: msg.into(),
         }
     }
 }
-
-impl std::error::Error for ExchangeError {}
 
 #[derive(PartialOrd, PartialEq, Hash, Eq)]
 pub struct AttachmentKey {

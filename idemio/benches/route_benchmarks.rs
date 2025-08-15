@@ -6,7 +6,7 @@ use idemio::handler::{Handler, HandlerId};
 use idemio::router::config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
-use idemio::router::route::PathRouter;
+use idemio::router::route::PathMatcher;
 use idemio::status::{ExchangeState, HandlerStatus};
 use std::convert::Infallible;
 use std::hint::black_box;
@@ -29,7 +29,7 @@ impl Handler<(), (), ()> for DummyHandler {
     }
 }
 
-fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathRouter<(), (), ()> {
+fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathMatcher<(), (), ()> {
     let mut registry = HandlerRegistry::new();
     registry
         .register_handler(HandlerId::new("test1"), DummyHandler)
@@ -82,7 +82,7 @@ fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathRouter<(), 
         .end_route();
 
     let config = builder.build();
-    PathRouter::new(&config, &registry).unwrap()
+    PathMatcher::new(&config, &registry).unwrap()
 }
 
 fn bench_dynamic_route_table(c: &mut Criterion) {
