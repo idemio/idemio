@@ -17,7 +17,7 @@ use thiserror::Error;
 ///
 /// All type parameters must implement `Send + Sync` for thread safety.
 #[async_trait]
-pub trait ExchangeFactory<Key, Request, In, Out, Meta>
+pub trait ExchangeFactory<Request, In, Out, Meta>
 where
     Self: Send + Sync,
     Request: Send + Sync,
@@ -27,10 +27,10 @@ where
 {
 
     // TODO - change the output to generic 'key' which will be used by the path matcher.
-    async fn extract_route_info(
+    async fn extract_route_info<'a>(
         &self,
-        request: &Request,
-    ) -> Result<Key, ExchangeFactoryError>;
+        request: &'a Request,
+    ) -> Result<(&'a str, &'a str), ExchangeFactoryError>;
 
     /// Creates an Exchange object from an incoming request.
     ///
@@ -165,7 +165,7 @@ pub mod hyper {
     pub struct HyperExchangeFactory;
 
     #[async_trait]
-    impl ExchangeFactory<PathPrefixMethodKey, Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts>
+    impl ExchangeFactory<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts>
     for HyperExchangeFactory
     {
         /// Extracts HTTP method and path from a Hyper request.
@@ -190,13 +190,13 @@ pub mod hyper {
         /// This method extracts routing information directly from the HTTP request
         /// without consuming it. It uses Hyper's built-in method and URI parsing,
         /// which are guaranteed to be present in valid HTTP requests.
-        async fn extract_route_info(
+        async fn extract_route_info<'a>(
             &self,
-            request: &Request<Incoming>,
-        ) -> Result<PathPrefixMethodKey, ExchangeFactoryError> {
+            request: &'a Request<Incoming>,
+        ) -> Result<(&'a str, &'a str), ExchangeFactoryError> {
             let method = request.method().as_str();
             let path = request.uri().path();
-            Ok(PathPrefixMethodKey::new(path, method))
+            Ok((path, method))
         }
 
         /// Creates an Exchange from a Hyper HTTP request with streaming body support.

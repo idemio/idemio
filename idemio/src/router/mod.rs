@@ -30,9 +30,9 @@ where
     Out: Send + Sync,
     Meta: Send + Sync,
 {
-    type PathMatcher: PathMatcherTrait<Key, In, Out, Meta> + Send + Sync;
+    type PathMatcher: PathMatcherTrait<In, Out, Meta> + Send + Sync;
     /// Factory for creating exchanges from requests
-    type Factory: ExchangeFactory<Key, Req, In, Out, Meta> + Send + Sync;
+    type Factory: ExchangeFactory<Req, In, Out, Meta> + Send + Sync;
     /// Executor for running handler chains
     type Executor: HandlerExecutor<In, Out, Meta> + Send + Sync;
 }
@@ -44,6 +44,7 @@ where
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
+    Key: Send,
     Components: RouterComponents<Key, Req, In, Out, Meta>,
 {
     /// PhantomData to maintain type information for the request type
@@ -62,9 +63,9 @@ where
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
+    Key: Send,
     Components: RouterComponents<Key, Req, In, Out, Meta>,
 {
-
     pub fn new(
         registry: &HandlerRegistry<In, Out, Meta>,
         config: &RouterConfig,
@@ -72,12 +73,6 @@ where
         exchange_factory: Components::Factory,
         handler_executor: Components::Executor,
     ) -> Result<Self, RouterError> {
-//        let matcher = match PathPrefixMethodPathMatcher::new(config, registry) {
-//            Ok(table) => table,
-//            Err(e) => {
-//                return Err(RouterError::path_matcher_error(e));
-//            }
-//        };
         Ok(Self {
             phantom: PhantomData::default(),
             factory: Arc::new(exchange_factory),
@@ -89,12 +84,13 @@ where
 
 #[async_trait]
 impl<Key, Req, In, Out, Meta, Components> Router<Req, Out>
-for RequestRouter<Key, Req, In, Out, Meta, Components>
+    for RequestRouter<Key, Req, In, Out, Meta, Components>
 where
     Req: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
+    Key: Send,
     Components: RouterComponents<Key, Req, In, Out, Meta>,
 {
     async fn route(&self, request: Req) -> Result<Out, RouterError> {
@@ -102,22 +98,21 @@ where
             .factory
             .extract_route_info(&request)
             .await
-            .map_err(|e| RouterError::invalid_exchange(e))?;
-
-        //log::trace!("Extracted route info from request: {}@{}", &path, &method);
+            .map_err(|e| {
+                RouterError::invalid_exchange(
+                    "Error occurred while trying to extract route info from the request.",
+                    e,
+                )
+            })?;
 
         let executables = self
             .matcher
             .lookup(key)
-            .ok_or(RouterError::missing_route("TODO"))?;
+            .ok_or(RouterError::missing_route(key.0, key.1))?;
 
-        //log::trace!("Found handler chain for request: {}@{}", &path, &method);
-
-        let mut exchange = self
-            .factory
-            .create_exchange(request)
-            .await
-            .map_err(|e| RouterError::invalid_exchange(e))?;
+        let mut exchange = self.factory.create_exchange(request).await.map_err(|e| {
+            RouterError::invalid_exchange("Error occurred while creating a new exchange.", e)
+        })?;
 
         let result = self
             .executor
@@ -138,8 +133,8 @@ pub enum RouterError {
     ///
     /// This occurs when a request is made to a path/method combination
     /// that has no configured handler chain.
-    #[error("Route '{route}' was not found.")]
-    MissingRoute { route: String },
+    #[error("Matching route for key ({key1} -- {key2}) was not found.")]
+    MissingRoute { key1: String, key2: String },
 
     /// An error occurred while executing the handler chain
     ///
@@ -155,8 +150,9 @@ pub enum RouterError {
     ///
     /// This wraps errors from the exchange factory, typically indicating
     /// problems with request parsing or exchange initialization.
-    #[error("Error while creating a new exchange.")]
+    #[error("Error while creating a new exchange. {message}")]
     InvalidExchange {
+        message: String,
         #[source]
         source: ExchangeFactoryError,
     },
@@ -173,15 +169,11 @@ pub enum RouterError {
 }
 
 impl RouterError {
-    /// Create a new `MissingRoute` error
-    ///
-    /// # Arguments
-    ///
-    /// * `route` - The route path that was not found
     #[inline]
-    pub fn missing_route(route: impl Into<String>) -> Self {
+    pub fn missing_route(key1: impl Into<String>, key2: impl Into<String>) -> Self {
         RouterError::MissingRoute {
-            route: route.into(),
+            key1: key1.into(),
+            key2: key2.into(),
         }
     }
 
@@ -211,8 +203,11 @@ impl RouterError {
     ///
     /// * `err` - The underlying exchange factory error
     #[inline]
-    pub const fn invalid_exchange(err: ExchangeFactoryError) -> Self {
-        RouterError::InvalidExchange { source: err }
+    pub fn invalid_exchange(msg: impl Into<String>, err: ExchangeFactoryError) -> Self {
+        RouterError::InvalidExchange {
+            message: msg.into(),
+            source: err,
+        }
     }
 }
 
@@ -220,8 +215,8 @@ impl RouterError {
 mod tests {
     use super::*;
     use crate::exchange::Exchange;
-    use async_trait::async_trait;
     use crate::router::path::PathPrefixMethodKey;
+    use async_trait::async_trait;
 
     /// Test demonstrating custom exchange factory implementation
     ///
@@ -236,16 +231,16 @@ mod tests {
         struct CustomExchangeFactory;
 
         #[async_trait]
-        impl ExchangeFactory<PathPrefixMethodKey, String, String, String, ()> for CustomExchangeFactory {
-            async fn extract_route_info(
+        impl ExchangeFactory<String, String, String, ()> for CustomExchangeFactory {
+            async fn extract_route_info<'a>(
                 &self,
-                request: &String,
-            ) -> Result<PathPrefixMethodKey, ExchangeFactoryError> {
+                request: &'a String,
+            ) -> Result<(&'a str, &'a str), ExchangeFactoryError> {
                 let mut parts = request.split(':');
                 if let (Some(method), Some(path), Some(_)) =
                     (parts.next(), parts.next(), parts.next())
                 {
-                    Ok(PathPrefixMethodKey::new(method, path))
+                    Ok((method, path))
                 } else {
                     Err(ExchangeFactoryError::invalid_exchange("Invalid format"))
                 }
@@ -268,8 +263,8 @@ mod tests {
         let custom_request = "GET:/test:body_content".to_string();
 
         let key = factory.extract_route_info(&custom_request).await.unwrap();
-        assert_eq!(key.method, "GET");
-        assert_eq!(key.path, "/test");
+        assert_eq!(key.0, "GET");
+        assert_eq!(key.1, "/test");
 
         let mut exchange = factory.create_exchange(custom_request).await.unwrap();
         assert_eq!(exchange.input().await.unwrap(), "body_content");

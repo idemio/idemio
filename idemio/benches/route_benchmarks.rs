@@ -6,7 +6,7 @@ use idemio::handler::{Handler, HandlerId};
 use idemio::router::config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
-use idemio::router::path::PathPrefixMethodPathMatcher;
+use idemio::router::path::{PathMatcherTrait, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::status::{ExchangeState, HandlerStatus};
 use std::convert::Infallible;
 use std::hint::black_box;
@@ -87,10 +87,9 @@ fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathPrefixMetho
 
 fn bench_dynamic_route_table(c: &mut Criterion) {
     let table = create_populated_dynamic_route_table_v2(1000);
-
     c.bench_function("dynamic_route_table_v2", |b| {
         b.iter(|| {
-            black_box(table.lookup("/test/12345", "GET"));
+            black_box(table.lookup(("GET", "/test/12345")));
         });
     });
 }
