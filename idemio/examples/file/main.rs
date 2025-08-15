@@ -26,22 +26,36 @@ use idemio::router::config::builder::{
 };
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
+use idemio::router::path::{PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 
 // Define the RouterComponents implementation for Hyper
 struct HyperComponents;
 
-impl RouterComponents<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts>
-    for HyperComponents
+impl
+    RouterComponents<
+        PathPrefixMethodKey,
+        Request<Incoming>,
+        Bytes,
+        BoxBody<Bytes, std::io::Error>,
+        Parts,
+    > for HyperComponents
 {
+    type PathMatcher = PathPrefixMethodPathMatcher<Bytes, BoxBody<Bytes, std::io::Error>, Parts>;
     type Factory = HyperExchangeFactory;
     type Executor = DefaultExecutor;
 }
 
 // Type alias for cleaner signatures
-type HyperRouter =
-    RequestRouter<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts, HyperComponents>;
+type HyperRouter = RequestRouter<
+    PathPrefixMethodKey,
+    Request<Incoming>,
+    Bytes,
+    BoxBody<Bytes, std::io::Error>,
+    Parts,
+    HyperComponents,
+>;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct FileHandlerConfig {
@@ -125,15 +139,15 @@ fn create_router() -> HyperRouter {
             .end_method()
         .end_route()
         .build();
-    
-    // Create the router using the new constructor signature
-    RequestRouter::new(
-        &handler_registry,
-        &router_config,
-        HyperExchangeFactory,
-        DefaultExecutor,
-    )
-    .unwrap()
+    todo!("Create path prefix matcher externally and pass into constructor.")
+//    // Create the router using the new constructor signature
+//    RequestRouter::new(
+//        &handler_registry,
+//        &router_config,
+//        HyperExchangeFactory,
+//        DefaultExecutor,
+//    )
+//    .unwrap()
 }
 
 async fn handle_request(
@@ -159,8 +173,8 @@ async fn handle_request(
             // Handle routing errors
             println!("Error handling request: {}", e);
             let (status_code, error_message) = match e {
-                RouterError::MissingRoute{..} => (404, "Route not found"),
-                RouterError::InvalidExchange{..} => (400, "Bad request"),
+                RouterError::MissingRoute { .. } => (404, "Route not found"),
+                RouterError::InvalidExchange { .. } => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
 
