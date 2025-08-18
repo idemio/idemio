@@ -7,7 +7,7 @@ use crate::handler::registry::HandlerRegistry;
 use crate::router::config::RouterConfig;
 use crate::router::executor::{ExecutorError, HandlerExecutor};
 use crate::router::factory::{ExchangeFactory, ExchangeFactoryError};
-use crate::router::path::{PathMatcherError, PathMatcherTrait};
+use crate::router::path::{PathMatcherError, PathMatcher};
 use async_trait::async_trait;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ where
     Out: Send + Sync,
     Meta: Send + Sync,
 {
-    type PathMatcher: PathMatcherTrait<In, Out, Meta> + Send + Sync;
+    type PathMatcher: PathMatcher<In, Out, Meta> + Send + Sync;
     /// Factory for creating exchanges from requests
     type Factory: ExchangeFactory<Req, In, Out, Meta> + Send + Sync;
     /// Executor for running handler chains
@@ -67,8 +67,6 @@ where
     Components: RouterComponents<Key, Req, In, Out, Meta>,
 {
     pub fn new(
-        registry: &HandlerRegistry<In, Out, Meta>,
-        config: &RouterConfig,
         matcher: Components::PathMatcher,
         exchange_factory: Components::Factory,
         handler_executor: Components::Executor,
@@ -178,30 +176,18 @@ impl RouterError {
     }
 
     /// Create a new `PathMatcherError` error
-    ///
-    /// # Arguments
-    ///
-    /// * `err` - The underlying path matcher error
     #[inline]
     pub const fn path_matcher_error(err: PathMatcherError) -> Self {
         RouterError::PathMatcherError { source: err }
     }
 
     /// Create a new `ExecutionFailure` error
-    ///
-    /// # Arguments
-    ///
-    /// * `err` - The underlying executor error
     #[inline]
     pub const fn execution_failure(err: ExecutorError) -> Self {
         RouterError::ExecutionFailure { source: err }
     }
 
     /// Create a new `InvalidExchange` error
-    ///
-    /// # Arguments
-    ///
-    /// * `err` - The underlying exchange factory error
     #[inline]
     pub fn invalid_exchange(msg: impl Into<String>, err: ExchangeFactoryError) -> Self {
         RouterError::InvalidExchange {

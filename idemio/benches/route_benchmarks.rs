@@ -6,7 +6,7 @@ use idemio::handler::{Handler, HandlerId};
 use idemio::router::config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
-use idemio::router::path::{PathMatcherTrait, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
+use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::status::{ExchangeState, HandlerStatus};
 use std::convert::Infallible;
 use std::hint::black_box;

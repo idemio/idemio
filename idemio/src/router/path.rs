@@ -277,7 +277,7 @@ where
     }
 }
 
-pub trait PathMatcherTrait<In, Out, Meta>
+pub trait PathMatcher<In, Out, Meta>
 where
     In: Send + Sync,
     Out: Send + Sync,
@@ -390,7 +390,7 @@ where
     nodes: PathNode<In, Out, Meta>,
 }
 
-impl<In, Out, Meta> PathMatcherTrait<In, Out, Meta> for PathPrefixMethodPathMatcher<In, Out, Meta>
+impl<In, Out, Meta> PathMatcher<In, Out, Meta> for PathPrefixMethodPathMatcher<In, Out, Meta>
 where
     In: Send + Sync,
     Out: Send + Sync,
@@ -484,8 +484,8 @@ where
         &self,
         key: (&str, &str),
     ) -> Option<Arc<LoadedChain<In, Out, Meta>>> {
-        let request_method = key.0;
-        let request_path = key.1;
+        let request_path = key.0;
+        let request_method = key.1;
         // Fast path: try the exact static match first
         if let Some(handlers) = self
             .static_paths
@@ -612,7 +612,7 @@ mod test {
     use crate::router::config::builder::{
         MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
     };
-    use crate::router::path::{PathMatcherTrait, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
+    use crate::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
     use crate::status::{ExchangeState, HandlerStatus};
     use async_trait::async_trait;
     use std::convert::Infallible;

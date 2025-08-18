@@ -26,7 +26,7 @@ use idemio::router::config::builder::{
 };
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::path::{PathPrefixMethodKey, PathPrefixMethodPathMatcher};
+use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 
@@ -35,7 +35,7 @@ struct HyperComponents;
 
 impl
     RouterComponents<
-        PathPrefixMethodKey,
+        PathPrefixMethodKey<'_>,
         Request<Incoming>,
         Bytes,
         BoxBody<Bytes, std::io::Error>,
@@ -48,8 +48,8 @@ impl
 }
 
 // Type alias for cleaner signatures
-type HyperRouter = RequestRouter<
-    PathPrefixMethodKey,
+type HyperRouter<'a> = RequestRouter<
+    PathPrefixMethodKey<'a>,
     Request<Incoming>,
     Bytes,
     BoxBody<Bytes, std::io::Error>,
@@ -108,7 +108,7 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for FileHandler {
 }
 
 #[rustfmt::skip]
-fn create_router() -> HyperRouter {
+fn create_router<'a>() -> HyperRouter<'a> {
     let mut handler_registry = idemio::handler::registry::HandlerRegistry::new();
 
     // Register file handler
@@ -139,20 +139,19 @@ fn create_router() -> HyperRouter {
             .end_method()
         .end_route()
         .build();
-    todo!("Create path prefix matcher externally and pass into constructor.")
-//    // Create the router using the new constructor signature
-//    RequestRouter::new(
-//        &handler_registry,
-//        &router_config,
-//        HyperExchangeFactory,
-//        DefaultExecutor,
-//    )
-//    .unwrap()
+    
+    let matcher = PathPrefixMethodPathMatcher::new(&router_config, &handler_registry).unwrap();
+    RequestRouter::new(
+        matcher,
+        HyperExchangeFactory,
+        DefaultExecutor,
+    )
+    .unwrap()
 }
 
 async fn handle_request(
     req: Request<Incoming>,
-    router: Arc<HyperRouter>,
+    router: Arc<HyperRouter<'_>>,
 ) -> Result<Response<BoxBody<Bytes, std::io::Error>>, Box<dyn std::error::Error + Send + Sync>> {
     // Extract the path for logging
     let path = req.uri().path().to_string();
