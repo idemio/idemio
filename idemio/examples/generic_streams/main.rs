@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::{StreamExt, stream, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, StreamBody};
 use hyper::body::{Bytes, Frame, Incoming};
@@ -26,6 +26,7 @@ use idemio::router::config::builder::{
 };
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
+use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
@@ -33,16 +34,29 @@ use tokio::net::TcpListener;
 // Define the RouterComponents implementation for Hyper
 struct HyperComponents;
 
-impl RouterComponents<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts>
-    for HyperComponents
+impl
+    RouterComponents<
+        PathPrefixMethodKey<'_>,
+        Request<Incoming>,
+        Bytes,
+        BoxBody<Bytes, std::io::Error>,
+        Parts,
+    > for HyperComponents
 {
+    type PathMatcher = PathPrefixMethodPathMatcher<Bytes, BoxBody<Bytes, std::io::Error>, Parts>;
     type Factory = HyperExchangeFactory;
     type Executor = DefaultExecutor;
 }
 
 // Type alias for cleaner signatures
-type HyperRouter =
-    RequestRouter<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts, HyperComponents>;
+type HyperRouter<'a> = RequestRouter<
+    PathPrefixMethodKey<'a>,
+    Request<Incoming>,
+    Bytes,
+    BoxBody<Bytes, std::io::Error>,
+    Parts,
+    HyperComponents,
+>;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct StreamingLoggerConfig {
@@ -116,15 +130,14 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for StreamProcessorHa
                     .collect();
 
                 // Create output stream with delays
-                let output_stream = stream::iter(processed_chunks).then(move |chunk| {
-                    async move {
-                        sleep(delay).await;
-                        Ok(Frame::data(chunk))
-                    }
+                let output_stream = stream::iter(processed_chunks).then(move |chunk| async move {
+                    sleep(delay).await;
+                    Ok(Frame::data(chunk))
                 });
 
                 // Convert the stream to a BoxBody with explicit type bounds
-                let body: BoxBody<Bytes, std::io::Error> = BodyExt::boxed(StreamBody::new(output_stream));
+                let body: BoxBody<Bytes, std::io::Error> =
+                    BodyExt::boxed(StreamBody::new(output_stream));
                 exchange.set_output(body);
 
                 Ok(HandlerStatus::new(
@@ -136,11 +149,11 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for StreamProcessorHa
 
                 // Create an error response stream
                 let error_message = format!("Stream processing error: {}", e);
-                let error_stream = stream::once(async move {
-                    Ok(Frame::data(Bytes::from(error_message)))
-                });
+                let error_stream =
+                    stream::once(async move { Ok(Frame::data(Bytes::from(error_message))) });
 
-                let error_body: BoxBody<Bytes, std::io::Error> = BodyExt::boxed(StreamBody::new(error_stream));
+                let error_body: BoxBody<Bytes, std::io::Error> =
+                    BodyExt::boxed(StreamBody::new(error_stream));
                 exchange.set_output(error_body);
 
                 Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR))
@@ -152,7 +165,6 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for StreamProcessorHa
         "stream_processor_handler"
     }
 }
-
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct DataGeneratorConfig {
@@ -212,7 +224,7 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for DataGeneratorHand
 
 // Updated function to create a router with streaming handlers
 #[rustfmt::skip]
-fn create_streaming_router() -> HyperRouter {
+fn create_streaming_router<'a>() -> HyperRouter<'a> {
     let mut handler_registry = HandlerRegistry::new();
 
     // Register streaming logger handler
@@ -287,9 +299,9 @@ fn create_streaming_router() -> HyperRouter {
         .end_route()
         .build();
 
+    let matcher = PathPrefixMethodPathMatcher::new(&router_config, &handler_registry).unwrap();
     RequestRouter::new(
-        &handler_registry,
-        &router_config,
+        matcher,
         HyperExchangeFactory,
         DefaultExecutor,
     ).unwrap()
@@ -297,7 +309,7 @@ fn create_streaming_router() -> HyperRouter {
 
 async fn handle_streaming_request(
     req: Request<Incoming>,
-    router: Arc<HyperRouter>,
+    router: Arc<HyperRouter<'_>>,
 ) -> Result<Response<BoxBody<Bytes, std::io::Error>>, Box<dyn std::error::Error + Send + Sync>> {
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
@@ -316,8 +328,8 @@ async fn handle_streaming_request(
         Err(e) => {
             println!("Error handling streaming request: {}", e);
             let (status_code, error_message) = match e {
-                RouterError::MissingRoute{..} => (404, "Route not found"),
-                RouterError::InvalidExchange{..} => (400, "Bad request"),
+                RouterError::MissingRoute { .. } => (404, "Route not found"),
+                RouterError::InvalidExchange { .. } => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
 

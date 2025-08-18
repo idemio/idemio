@@ -277,101 +277,42 @@ where
     }
 }
 
-/// A high-performance router for matching HTTP paths to handler chains.
-///
-/// The router uses a hybrid approach for optimal performance:
-/// - **Static paths** (without wildcards): Fast O(1) hash-based lookup
-/// - **Dynamic paths** (with wildcards): Tree-based matching with longest-prefix resolution
-///
-/// # Wildcard Support
-///
-/// - Wildcard segments ("*") match exactly one path segment
-/// - Multiple wildcard patterns use longest-prefix matching
-/// - Wildcards can appear at any depth in the path hierarchy
-///
-/// # Performance Characteristics
-///
-/// - Static path lookup: O(1) average case
-/// - Dynamic path lookup: O(d) where d is the maximum path depth
-/// - Memory usage scales with the number of unique path segments
-///
-/// # Thread Safety
-///
-/// `PathMatcher` is fully thread-safe and can be shared across multiple async tasks.
-/// All internal data structures use `Arc` for safe concurrent access.
-pub struct PathMatcher<In, Out, Meta>
+pub trait PathMatcher<In, Out, Meta>
 where
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
 {
-    /// Fast hash-based lookup for static paths (no wildcards)
-    static_paths: HashMap<StaticPathKey, Arc<LoadedChain<In, Out, Meta>>, FnvBuildHasher>,
-    /// Tree structure for dynamic path matching with wildcards
-    nodes: PathNode<In, Out, Meta>,
-}
 
-impl<In, Out, Meta> PathMatcher<In, Out, Meta>
-where
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
-{
-    /// Creates a new PathMatcher from the provided configuration and handler registry.
+    /// Parses the route configuration and builds internal routing structures.
     ///
     /// # Parameters
     ///
-    /// - `route_config`: Configuration containing path definitions and handler chains.
-    ///   This specifies which handlers to execute for different path/method combinations.
-    /// - `registry`: Registry containing all available handlers referenced in the config.
-    ///   All handler IDs in the config must exist in this registry.
+    /// - `route_config`: Configuration containing path and handler definitions
+    /// - `handler_registry`: Registry containing available handlers
     ///
     /// # Returns
     ///
-    /// A `Result` containing the constructed `PathMatcher` or a `PathMatcherError` if:
-    /// - Any handler referenced in the config is missing from the registry
-    /// - The configuration contains invalid path patterns
-    /// - Required termination handlers are not specified
+    /// `Result` indicating success or `PathMatcherError` if the configuration is invalid.
     ///
     /// # Behavior
     ///
-    /// 1. **Validates** all handler references to exist in registry
-    /// 2. **Optimizes** static paths (no wildcards) for O(1) hash lookup
-    /// 3. **Builds** tree structure for dynamic paths with wildcards
-    /// 4. **Logs** detailed information about the routing structure being built
-    ///
-    /// # Performance
-    ///
-    /// Construction time is O(n*m) where n is the number of routes and m is the average path depth.
-    /// The resulting matcher provides very fast lookup times during request routing.
-    pub fn new(
+    /// 1. **Static Path Optimization**: Paths without wildcards are stored in a hash table for O(1) lookup
+    /// 2. **Dynamic Path Tree**: All paths (including static ones) are added to the tree for fallback
+    /// 3. **Depth Tracking**: Records the depth of each node for wildcard precedence resolution
+    fn parse_config(
+        &mut self,
         route_config: &RouterConfig,
-        registry: &HandlerRegistry<In, Out, Meta>,
-    ) -> Result<Self, PathMatcherError> {
-        let mut router = Self {
-            static_paths: HashMap::with_hasher(FnvBuildHasher::default()),
-            nodes: PathNode::default(),
-        };
-        if let Err(e) = router.parse_config(route_config, registry) {
-            return Err(e);
-        }
-        Ok(router)
-    }
+        handler_registry: &HandlerRegistry<In, Out, Meta>,
+    ) -> Result<(), PathMatcherError>;
 
-    /// Finds a handler by ID in the registry.
-    ///
-    /// # Parameters
-    ///
-    /// - `handler`: String identifier for the handler to find
-    /// - `handler_registry`: Registry to search in
-    ///
-    /// # Returns
-    ///
-    /// `Result` containing the handler `Arc` or `PathMatcherError` if the handler is not found.
-    ///
-    /// # Errors
-    ///
-    /// Returns `PathMatcherError::HandlerRegistryError` if the handler ID is not registered.
+    fn lookup(
+        &self,
+        key: (&str, &str),
+    ) -> Option<Arc<LoadedChain<In, Out, Meta>>>;
+
+    fn new(config: &RouterConfig, handler_registry: &HandlerRegistry<In, Out, Meta>) -> Result<Self, PathMatcherError> where Self: Sized;
+
     fn find_in_registry(
         handler: &str,
         handler_registry: &HandlerRegistry<In, Out, Meta>,
@@ -383,25 +324,6 @@ where
         }
     }
 
-    /// Finds multiple handlers by their IDs in the registry.
-    ///
-    /// # Parameters
-    ///
-    /// - `handlers`: Slice of handler ID strings to find
-    /// - `handler_registry`: Registry to search in
-    ///
-    /// # Returns
-    ///
-    /// `Result` containing a vector of handler `Arc`s or `PathMatcherError` if any handler is missing.
-    ///
-    /// # Behavior
-    ///
-    /// This method fails fast - if any handler is missing, it returns an error immediately
-    /// without processing the remaining handlers.
-    ///
-    /// # Errors
-    ///
-    /// Returns `PathMatcherError::HandlerRegistryError` if any handler ID is not registered.
     fn find_all_in_registry(
         handlers: &[String],
         handler_registry: &HandlerRegistry<In, Out, Meta>,
@@ -414,28 +336,6 @@ where
         Ok(registered_handlers)
     }
 
-    /// Loads handlers from the registry based on a path chain configuration.
-    ///
-    /// # Parameters
-    ///
-    /// - `handler_registry`: Registry containing available handlers
-    /// - `path_chain`: Configuration specifying which handlers to load and in what order
-    ///
-    /// # Returns
-    ///
-    /// `Result` containing a `LoadedChain` with all resolved handlers or `PathMatcherError`
-    /// if any handlers are missing or the configuration is invalid.
-    ///
-    /// # Validation
-    ///
-    /// - **Request handlers**: Optional, can be empty
-    /// - **Termination handler**: Required, must be specified
-    /// - **Response handlers**: Optional can be empty
-    ///
-    /// # Errors
-    ///
-    /// - `PathMatcherError::InvalidMethod` if no termination handler is specified
-    /// - `PathMatcherError::HandlerRegistryError` if any handler is not found in the registry
     fn load_handlers(
         handler_registry: &HandlerRegistry<In, Out, Meta>,
         path_chain: &PathChain,
@@ -462,36 +362,41 @@ where
             registered_response_handlers,
         ))
     }
+}
 
-    /// Parses the route configuration and builds internal routing structures.
-    ///
-    /// # Parameters
-    ///
-    /// - `route_config`: Configuration containing path and handler definitions
-    /// - `handler_registry`: Registry containing available handlers
-    ///
-    /// # Returns
-    ///
-    /// `Result` indicating success or `PathMatcherError` if the configuration is invalid.
-    ///
-    /// # Behavior
-    ///
-    /// 1. **Static Path Optimization**: Paths without wildcards are stored in a hash table for O(1) lookup
-    /// 2. **Dynamic Path Tree**: All paths (including static ones) are added to the tree for fallback
-    /// 3. **Depth Tracking**: Records the depth of each node for wildcard precedence resolution
-    /// 4. **Method Mapping**: Associates HTTP methods with handler chains at each path endpoint
-    /// 5. **Detailed Logging**: Provides comprehensive logging for debugging and monitoring
-    ///
-    /// # Logging
-    ///
-    /// - `INFO`: Overall parsing progress and statistics
-    /// - `DEBUG`: Individual path and method processing
-    /// - `TRACE`: Detailed segment-by-segment tree building and wildcard detection
-    ///
-    /// # Current Limitations
-    ///
-    /// - Only `Routes::HttpRequestPaths` is fully implemented
-    /// - `Routes::HttpHeaderPaths` returns a `todo!()` error
+pub struct PathPrefixMethodKey<'a> {
+    pub method: &'a str,
+    pub path: &'a str,
+}
+
+impl<'a> PathPrefixMethodKey<'a> {
+    pub fn new(method: &'a str, path: &'a str) -> Self {
+        Self {
+            method,
+            path,
+        }
+    }
+}
+
+pub struct PathPrefixMethodPathMatcher<In, Out, Meta>
+where
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
+{
+    /// Fast hash-based lookup for static paths (no wildcards)
+    static_paths: HashMap<StaticPathKey, Arc<LoadedChain<In, Out, Meta>>, FnvBuildHasher>,
+    /// Tree structure for dynamic path matching with wildcards
+    nodes: PathNode<In, Out, Meta>,
+}
+
+impl<In, Out, Meta> PathMatcher<In, Out, Meta> for PathPrefixMethodPathMatcher<In, Out, Meta>
+where
+    In: Send + Sync,
+    Out: Send + Sync,
+    Meta: Send + Sync,
+{
+
     fn parse_config(
         &mut self,
         route_config: &RouterConfig,
@@ -520,7 +425,7 @@ where
                             path
                         );
                     }
-                    let path_segments = Self::split_path(path);
+                    let path_segments = split_path(path);
                     let mut current_node = &mut self.nodes;
                     let mut depth = 0;
                     for segment in path_segments {
@@ -569,74 +474,28 @@ where
                 }
                 Ok(())
             }
-            Routes::HttpHeaderPaths(_) => {
-                todo!("Header-based routing is not yet implemented. Please use path-based routing.")
+            _ => {
+                Err(PathMatcherError::invalid_configuration("Route config type should be HttpRequestPaths"))
             }
         }
     }
 
-    /// Splits a path string into individual segments, filtering out empty segments.
-    ///
-    /// # Parameters
-    ///
-    /// - `path`: Path string to split (e.g., "/api/v1/users", "/health")
-    ///
-    /// # Returns
-    ///
-    /// An iterator over non-empty path segments. Leading and trailing slashes are ignored,
-    /// and consecutive slashes are treated as a single separator.
-    fn split_path(path: &str) -> Filter<Split<char>, fn(&&str) -> bool> {
-        path.split('/').filter(|s| !s.is_empty())
-    }
-
-    /// Looks up a handler chain for the given request path and HTTP method.
-    ///
-    /// # Parameters
-    ///
-    /// - `request_path`: The URL path to match (e.g., "/api/v1/users/123", "/health")
-    /// - `request_method`: The HTTP method (e.g., "GET", "POST", "PUT", "DELETE")
-    ///
-    /// # Returns
-    ///
-    /// An `Option` containing the `Arc<LoadedChain>` if a matching route is found, `None` otherwise.
-    ///
-    /// # Matching Algorithm
-    ///
-    /// 1. **Fast Path**: First attempts O(1) hash-based lookup for exact static path matches
-    /// 2. **Dynamic Path**: Falls back to tree traversal for wildcard pattern matching
-    /// 3. **Longest Prefix**: When multiple wildcard patterns match, selects the most specific (deepest) match
-    /// 4. **Exact Match Priority**: Static segments always take priority over wildcard matches at the same depth
-    ///
-    /// # Wildcard Behavior
-    ///
-    /// - Wildcard segments ("*") match exactly one path segment
-    /// - Multiple wildcards in a path pattern are supported
-    /// - Wildcards do not match across segment boundaries (no "/**" behavior)
-    /// - Longest-prefix matching ensures the most specific pattern wins
-    ///
-    /// # Examples
-    /// See any of the code examples for more detail.
-    ///
-    /// # Performance
-    ///
-    /// - Static paths: O(1) average case, O(1) worst case
-    /// - Dynamic paths: O(d) where d is the depth of the matching path
-    /// - Memory usage: Minimal during lookup, no allocations for static paths
-    pub fn lookup(
+    fn lookup(
         &self,
-        request_path: &str,
-        request_method: &str,
+        key: (&str, &str),
     ) -> Option<Arc<LoadedChain<In, Out, Meta>>> {
+        let request_path = key.0;
+        let request_method = key.1;
         // Fast path: try the exact static match first
         if let Some(handlers) = self
             .static_paths
-            .get(&StaticPathKey::new(request_method, request_path))
+            .get(&StaticPathKey::new(&request_method, &request_path))
         {
             return Some(handlers.clone());
         }
 
         // Dynamic path matching with wildcards
-        let req_path_segments = Self::split_path(request_path);
+        let req_path_segments = split_path(&request_path);
         let mut best_match: Option<&PathNode<In, Out, Meta>> = None;
         let mut max_depth = 0;
         let mut current_node = &self.nodes;
@@ -670,38 +529,46 @@ where
         // Return the best match found
         best_match.and_then(|node| node.methods.get(request_method).cloned())
     }
+
+    fn new(config: &RouterConfig, handler_registry: &HandlerRegistry<In, Out, Meta>) -> Result<Self, PathMatcherError> {
+        let mut matcher = Self {
+            nodes: PathNode::default(),
+            static_paths: HashMap::with_hasher(fnv::FnvBuildHasher::default()),
+        };
+        if let Err(e) = matcher.parse_config(config, handler_registry) {
+            return Err(e);
+        }
+        Ok(matcher)
+    }
+}
+
+/// Splits a path string into individual segments, filtering out empty segments.
+///
+/// # Parameters
+///
+/// - `path`: Path string to split (e.g., "/api/v1/users", "/health")
+///
+/// # Returns
+///
+/// An iterator over non-empty path segments. Leading and trailing slashes are ignored,
+/// and consecutive slashes are treated as a single separator.
+fn split_path(path: &str) -> Filter<Split<char>, fn(&&str) -> bool> {
+    path.split('/').filter(|s| !s.is_empty())
 }
 
 /// Errors that can occur during PathMatcher construction and operation.
-///
-/// This enum represents all possible error conditions when working with the PathMatcher,
-/// including configuration validation issues and handler registry problems.
 #[derive(Error, Debug)]
 pub enum PathMatcherError {
-    /// An invalid path pattern was specified in the configuration.
-    ///
-    /// This can occur when:
-    /// - Path syntax is malformed
-    /// - Invalid wildcard patterns are used
-    /// - Path segments contain invalid characters
+
+    #[error("Invalid path configuration. {message}")]
+    InvalidConfiguration { message: String},
+
     #[error("Path '{path}' is invalid.")]
     InvalidPath { path: String },
 
-    /// An invalid HTTP method or missing termination handler was specified.
-    ///
-    /// This can occur when:
-    /// - An unsupported HTTP method is used
-    /// - A termination handler is not specified for a path/method combination
-    /// - Method configuration is malformed
     #[error("Method '{method}' is invalid.")]
     InvalidMethod { method: String },
 
-    /// An error occurred while accessing the handler registry.
-    ///
-    /// This typically happens when:
-    /// - A handler referenced in the configuration is not registered
-    /// - Handler registry is in an inconsistent state
-    /// - Handler lookup fails due to internal registry errors
     #[error("Failed to register handler.")]
     HandlerRegistryError {
         #[source]
@@ -710,29 +577,17 @@ pub enum PathMatcherError {
 }
 
 impl PathMatcherError {
-    /// Creates a new `InvalidPath` error.
-    ///
-    /// # Parameters
-    ///
-    /// - `path`: The invalid path that caused the error
-    ///
-    /// # Returns
-    ///
-    /// A new `PathMatcherError::InvalidPath` variant.
+
     #[inline]
     pub(crate) fn invalid_path(path: impl Into<String>) -> Self {
         Self::InvalidPath { path: path.into() }
     }
 
-    /// Creates a new `InvalidMethod` error.
-    ///
-    /// # Parameters
-    ///
-    /// - `method`: The invalid method or error message
-    ///
-    /// # Returns
-    ///
-    /// A new `PathMatcherError::InvalidMethod` variant.
+    #[inline]
+    pub(crate) fn invalid_configuration(message: impl Into<String>) -> Self {
+        Self::InvalidConfiguration { message: message.into() }
+    }
+
     #[inline]
     pub(crate) fn invalid_method(method: impl Into<String>) -> Self {
         Self::InvalidMethod {
@@ -740,15 +595,6 @@ impl PathMatcherError {
         }
     }
 
-    /// Creates a new `HandlerRegistryError` wrapper.
-    ///
-    /// # Parameters
-    ///
-    /// - `registry_error`: The underlying handler registry error
-    ///
-    /// # Returns
-    ///
-    /// A new `PathMatcherError::HandlerRegistryError` variant that wraps the original error.
     #[inline]
     pub(crate) const fn registry_error(registry_error: HandlerRegistryError) -> Self {
         Self::HandlerRegistryError {
@@ -766,7 +612,7 @@ mod test {
     use crate::router::config::builder::{
         MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
     };
-    use crate::router::route::{PathMatcher};
+    use crate::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
     use crate::status::{ExchangeState, HandlerStatus};
     use async_trait::async_trait;
     use std::convert::Infallible;
@@ -848,26 +694,26 @@ mod test {
             .build();
 
         // Create PathMatcher with the configuration
-        let table = PathMatcher::new(&config, &registry).unwrap();
+        let table = PathPrefixMethodPathMatcher::new(&config, &registry).unwrap();
 
         // Test wildcard matching - should match the "/api/v1/*" pattern
-        let result = table.lookup("/api/v1/users", "GET");
+        let result = table.lookup(("/api/v1/users", "GET"));
         assert!(result.is_some());
         let handlers = result.unwrap();
         assert_eq!(handlers.request_handlers.len(), 6); // test_chain has 6 handlers
 
         // Test another wildcard match with a different path segment
-        let result = table.lookup("/api/v1/someOtherEndpoint", "GET");
+        let result = table.lookup(("/api/v1/someOtherEndpoint", "GET"));
         assert!(result.is_some());
         let handlers = result.unwrap();
         assert_eq!(handlers.request_handlers.len(), 6);
 
         // Test non-matching path - should return None
-        let result = table.lookup("/invalid", "GET");
+        let result = table.lookup(("/invalid", "GET"));
         assert!(result.is_none());
 
         // Test path that goes beyond wildcard - should still match "/api/v1/*"
-        let result = table.lookup("/api/v1/users/somethingElse", "GET");
+        let result = table.lookup(("/api/v1/users/somethingElse", "GET"));
         assert!(result.is_some());
         let handlers = result.unwrap();
         assert_eq!(handlers.request_handlers.len(), 6);

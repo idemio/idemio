@@ -1,5 +1,5 @@
 use crate::exchange::{Exchange, ExchangeError};
-use crate::router::route::LoadedChain;
+use crate::router::path::LoadedChain;
 use crate::status::ExchangeState;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -39,7 +39,7 @@ where
     /// use std::sync::Arc;
     /// use idemio::exchange::Exchange;
     /// use idemio::router::executor::{DefaultExecutor, ExecutorError, HandlerExecutor};
-    /// use idemio::router::route::LoadedChain;
+    /// use idemio::router::path::LoadedChain;
     ///
     /// async fn process_request<In, Out, Meta>(
     ///     executor: &DefaultExecutor,
@@ -183,7 +183,7 @@ where
     /// use std::sync::Arc;
     /// use idemio::exchange::Exchange;
     /// use idemio::router::executor::{DefaultExecutor, ExecutorError, HandlerExecutor};
-    /// use idemio::router::route::LoadedChain;
+    /// use idemio::router::path::LoadedChain;
     ///
     /// async fn process_with_default_executor<In, Out, Meta>(
     ///     chain: Arc<LoadedChain<In, Out, Meta>>,

@@ -26,20 +26,35 @@ use idemio::router::factory::hyper::HyperExchangeFactory;
 use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
+use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 
+// Define the RouterComponents implementation for Hyper
 // Define the RouterComponents implementation for Hyper
 struct HyperComponents;
 
-impl RouterComponents<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts>
-    for HyperComponents
+impl
+RouterComponents<
+    PathPrefixMethodKey<'_>,
+    Request<Incoming>,
+    Bytes,
+    BoxBody<Bytes, std::io::Error>,
+    Parts,
+> for HyperComponents
 {
+    type PathMatcher = PathPrefixMethodPathMatcher<Bytes, BoxBody<Bytes, std::io::Error>, Parts>;
     type Factory = HyperExchangeFactory;
     type Executor = DefaultExecutor;
 }
 
 // Type alias for cleaner signatures
-type HyperRouter =
-    RequestRouter<Request<Incoming>, Bytes, BoxBody<Bytes, std::io::Error>, Parts, HyperComponents>;
+type HyperRouter<'a> = RequestRouter<
+    PathPrefixMethodKey<'a>,
+    Request<Incoming>,
+    Bytes,
+    BoxBody<Bytes, std::io::Error>,
+    Parts,
+    HyperComponents,
+>;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct IdempotentLoggingHandlerConfig;
@@ -158,7 +173,7 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for EchoHandler {
 
 // Updated function with simplified return type and new constructor
 #[rustfmt::skip]
-fn create_router() -> HyperRouter {
+fn create_router<'a>() -> HyperRouter<'a> {
     let mut handler_registry = HandlerRegistry::new();
 
     // Register greeting handler
@@ -239,9 +254,9 @@ fn create_router() -> HyperRouter {
         .end_route()
         .build();
     // Create the router using the new constructor signature
+    let matcher = PathPrefixMethodPathMatcher::new(&router_config, &handler_registry).unwrap();
     RequestRouter::new(
-        &handler_registry,
-        &router_config,
+        matcher,
         HyperExchangeFactory,
         DefaultExecutor,
     )
@@ -250,7 +265,7 @@ fn create_router() -> HyperRouter {
 
 async fn handle_request(
     req: Request<Incoming>,
-    router: Arc<HyperRouter>,
+    router: Arc<HyperRouter<'_>>,
 ) -> Result<Response<BoxBody<Bytes, std::io::Error>>, Box<dyn std::error::Error + Send + Sync>> {
     // Extract the path for logging
     let path = req.uri().path().to_string();

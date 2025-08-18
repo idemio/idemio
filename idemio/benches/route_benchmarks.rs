@@ -6,7 +6,7 @@ use idemio::handler::{Handler, HandlerId};
 use idemio::router::config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
-use idemio::router::route::PathMatcher;
+use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::status::{ExchangeState, HandlerStatus};
 use std::convert::Infallible;
 use std::hint::black_box;
@@ -29,7 +29,7 @@ impl Handler<(), (), ()> for DummyHandler {
     }
 }
 
-fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathMatcher<(), (), ()> {
+fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathPrefixMethodPathMatcher<(), (), ()> {
     let mut registry = HandlerRegistry::new();
     registry
         .register_handler(HandlerId::new("test1"), DummyHandler)
@@ -82,15 +82,14 @@ fn create_populated_dynamic_route_table_v2(num_routes: usize) -> PathMatcher<(),
         .end_route();
 
     let config = builder.build();
-    PathMatcher::new(&config, &registry).unwrap()
+    PathPrefixMethodPathMatcher::new(&config, &registry).unwrap()
 }
 
 fn bench_dynamic_route_table(c: &mut Criterion) {
     let table = create_populated_dynamic_route_table_v2(1000);
-
     c.bench_function("dynamic_route_table_v2", |b| {
         b.iter(|| {
-            black_box(table.lookup("/test/12345", "GET"));
+            black_box(table.lookup(("GET", "/test/12345")));
         });
     });
 }
