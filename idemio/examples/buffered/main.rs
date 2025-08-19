@@ -15,45 +15,29 @@ use serde::{Deserialize, Serialize};
 use hyper_util::rt::TokioIo;
 use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
 use idemio::exchange::Exchange;
+use idemio::handler::registry::HandlerRegistry;
 use idemio::handler::Handler;
 use idemio::handler::HandlerId;
-use idemio::handler::registry::HandlerRegistry;
 use idemio::router::config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
+use idemio::router::path::http::PathPrefixMethodPathMatcher;
+use idemio::router::{Router, RouterBuilder, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
-use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
+use idemio::router::path::PathMatcher;
 
-// Define the RouterComponents implementation for Hyper
-// Define the RouterComponents implementation for Hyper
-struct HyperComponents;
-
-impl
-RouterComponents<
-    PathPrefixMethodKey<'_>,
+// Simplified type alias for the complete router
+type HyperRouter = idemio::router::RequestRouter<
     Request<Incoming>,
-    Bytes,
-    BoxBody<Bytes, std::io::Error>,
-    Parts,
-> for HyperComponents
-{
-    type PathMatcher = PathPrefixMethodPathMatcher<Bytes, BoxBody<Bytes, std::io::Error>, Parts>;
-    type Factory = HyperExchangeFactory;
-    type Executor = DefaultExecutor;
-}
-
-// Type alias for cleaner signatures
-type HyperRouter<'a> = RequestRouter<
-    PathPrefixMethodKey<'a>,
-    Request<Incoming>,
-    Bytes,
-    BoxBody<Bytes, std::io::Error>,
-    Parts,
-    HyperComponents,
+    Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
+    HyperExchangeFactory,
+    DefaultExecutor<BoxBody<Bytes, std::io::Error>>,
+    PathPrefixMethodPathMatcher<
+        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>
+    >,
 >;
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
@@ -63,10 +47,16 @@ struct IdempotentLoggingHandlerConfig;
 struct IdempotentLoggingHandler;
 
 #[async_trait]
-impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for IdempotentLoggingHandler {
-    async fn exec<'a>(
+impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
+for IdempotentLoggingHandler
+{
+    async fn exec(
         &self,
-        _exchange: &mut Exchange<'a, Bytes, BoxBody<Bytes, std::io::Error>, Parts>,
+        _exchange: &mut Exchange<
+            BoxBody<Bytes, std::io::Error>,
+            BoxBody<Bytes, std::io::Error>,
+            Parts,
+        >,
     ) -> Result<HandlerStatus, Infallible> {
         println!("Processing request with idempotent logging handler");
         Ok(HandlerStatus::new(ExchangeState::OK))
@@ -88,10 +78,16 @@ struct GreetingHandler {
 }
 
 #[async_trait]
-impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for GreetingHandler {
-    async fn exec<'a>(
+impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
+for GreetingHandler
+{
+    async fn exec(
         &self,
-        exchange: &mut Exchange<'a, Bytes, BoxBody<Bytes, std::io::Error>, Parts>,
+        exchange: &mut Exchange<
+            BoxBody<Bytes, std::io::Error>,
+            BoxBody<Bytes, std::io::Error>,
+            Parts,
+        >,
     ) -> Result<HandlerStatus, Infallible> {
         let input = match exchange.take_input().await {
             Ok(input) => input,
@@ -100,7 +96,17 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for GreetingHandler {
                     .message(format!("Could not consume input from exchange: {}", e)));
             }
         };
-        let input_str = String::from_utf8_lossy(&input).to_string();
+
+        // Convert BoxBody to Bytes for processing
+        let input_bytes = match input.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(e) => {
+                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                    .message(format!("Could not read input body: {}", e)));
+            }
+        };
+
+        let input_str = String::from_utf8_lossy(&input_bytes).to_string();
         let response_text = &self.config.config().get().response_text;
         let response = if input_str.trim().is_empty() {
             response_text.clone()
@@ -134,10 +140,16 @@ struct EchoHandler {
 }
 
 #[async_trait]
-impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for EchoHandler {
-    async fn exec<'a>(
+impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
+for EchoHandler
+{
+    async fn exec(
         &self,
-        exchange: &mut Exchange<'a, Bytes, BoxBody<Bytes, std::io::Error>, Parts>,
+        exchange: &mut Exchange<
+            BoxBody<Bytes, std::io::Error>,
+            BoxBody<Bytes, std::io::Error>,
+            Parts,
+        >,
     ) -> Result<HandlerStatus, Infallible> {
         let input = match exchange.take_input().await {
             Ok(input) => input,
@@ -146,7 +158,17 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for EchoHandler {
                     .message(format!("Could not consume input from exchange: {}", e)));
             }
         };
-        let input_str = String::from_utf8_lossy(&input).to_string();
+
+        // Convert BoxBody to Bytes for processing
+        let input_bytes = match input.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(e) => {
+                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                    .message(format!("Could not read input body: {}", e)));
+            }
+        };
+
+        let input_str = String::from_utf8_lossy(&input_bytes).to_string();
 
         let processed_input = if self.config.config().get().reverse {
             input_str.chars().rev().collect()
@@ -171,9 +193,9 @@ impl Handler<Bytes, BoxBody<Bytes, std::io::Error>, Parts> for EchoHandler {
     }
 }
 
-// Updated function with simplified return type and new constructor
+// Updated function using the new RouterBuilder
 #[rustfmt::skip]
-fn create_router<'a>() -> HyperRouter<'a> {
+fn create_router() -> HyperRouter {
     let mut handler_registry = HandlerRegistry::new();
 
     // Register greeting handler
@@ -253,19 +275,22 @@ fn create_router<'a>() -> HyperRouter<'a> {
             .end_method()
         .end_route()
         .build();
-    // Create the router using the new constructor signature
+
+    // Create the router using the new RouterBuilder with type state pattern
     let matcher = PathPrefixMethodPathMatcher::new(&router_config, &handler_registry).unwrap();
-    RequestRouter::new(
-        matcher,
-        HyperExchangeFactory,
-        DefaultExecutor,
-    )
-    .unwrap()
+    let executor = DefaultExecutor { _phantom: std::marker::PhantomData::<BoxBody<Bytes, std::io::Error>>::default() };
+    let factory = HyperExchangeFactory;
+
+    RouterBuilder::new()
+        .factory(factory)
+        .executor(executor)
+        .matcher(matcher)
+        .build()
 }
 
 async fn handle_request(
     req: Request<Incoming>,
-    router: Arc<HyperRouter<'_>>,
+    router: Arc<HyperRouter>,
 ) -> Result<Response<BoxBody<Bytes, std::io::Error>>, Box<dyn std::error::Error + Send + Sync>> {
     // Extract the path for logging
     let path = req.uri().path().to_string();
@@ -286,8 +311,8 @@ async fn handle_request(
             // Handle routing errors
             println!("Error handling request: {}", e);
             let (status_code, error_message) = match e {
-                RouterError::MissingRoute{..} => (404, "Route not found"),
-                RouterError::InvalidExchange{..} => (400, "Bad request"),
+                RouterError::MissingRoute { .. } => (404, "Route not found"),
+                RouterError::InvalidExchange { .. } => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
 

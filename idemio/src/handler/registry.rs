@@ -148,20 +148,16 @@ where
 /// Handlers are stored as `Arc<dyn Handler<In, Out, Meta>>` enabling efficient sharing
 /// and automatic cleanup when no longer referenced. The registry maintains strong
 /// references to all registered handlers.
-pub struct HandlerRegistry<In, Out, Meta>
+pub struct HandlerRegistry<E>
 where
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
+    E: Send + Sync,
 {
-    handlers: DashMap<HandlerId, Arc<dyn Handler<In, Out, Meta>>, fnv::FnvBuildHasher>,
+    handlers: DashMap<HandlerId, Arc<dyn Handler<E>>, fnv::FnvBuildHasher>,
 }
 
-impl<In, Out, Meta> HandlerRegistry<In, Out, Meta>
+impl<E> HandlerRegistry<E>
 where
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
+    E: Send + Sync,
 {
     /// Creates a new empty handler registry.
     ///
@@ -207,7 +203,7 @@ where
     pub(crate) fn find_with_id(
         &self,
         id: &HandlerId,
-    ) -> Result<Arc<dyn Handler<In, Out, Meta>>, HandlerRegistryError> {
+    ) -> Result<Arc<dyn Handler<E>>, HandlerRegistryError> {
         match self.handlers.get(id) {
             None => Err(HandlerRegistryError::missing_handler(id.clone())),
             Some(handler) => Ok(handler.value().clone()),
@@ -257,10 +253,10 @@ where
     /// pub struct MyHandler;
     ///
     /// #[async_trait]
-    /// impl Handler<String, String, ()> for MyHandler {
-    ///     async fn exec<'a>(
+    /// impl Handler<Exchange<String, String, ()>> for MyHandler {
+    ///     async fn exec(
     ///         &self,
-    ///         exchange: &mut Exchange<'a, String, String, ()>
+    ///         exchange: &mut Exchange<String, String, ()>
     ///     ) -> Result<HandlerStatus, Infallible>
     ///     {
     ///         Ok(HandlerStatus::new(ExchangeState::OK))
@@ -271,7 +267,7 @@ where
     ///     }
     ///
     /// }
-    /// let mut registry = HandlerRegistry::<String, String, ()>::new();
+    /// let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
     /// let handler_id = HandlerId::new("my_handler");
     /// let handler = MyHandler;
     ///
@@ -281,7 +277,7 @@ where
     pub fn register_handler(
         &mut self,
         handler_id: HandlerId,
-        handler: impl Handler<In, Out, Meta> + 'static,
+        handler: impl Handler<E> + 'static,
     ) -> Result<(), HandlerRegistryError> {
         match self.handlers.entry(handler_id.clone()) {
             Entry::Occupied(_) => Err(HandlerRegistryError::conflicting_handler_id(handler_id)),
@@ -315,10 +311,10 @@ mod tests {
     }
 
     #[async_trait]
-    impl Handler<String, String, ()> for TestHandler {
-        async fn exec<'a>(
+    impl Handler<Exchange<String, String, ()>> for TestHandler {
+        async fn exec(
             &self,
-            _exchange: &mut Exchange<'a, String, String, ()>,
+            _exchange: &mut Exchange<String, String, ()>,
         ) -> Result<HandlerStatus, Infallible> {
             Ok(HandlerStatus::new(ExchangeState::OK))
         }
@@ -332,10 +328,10 @@ mod tests {
     struct AnotherTestHandler;
 
     #[async_trait]
-    impl Handler<String, String, ()> for AnotherTestHandler {
-        async fn exec<'a>(
+    impl Handler<Exchange<String, String, ()>> for AnotherTestHandler {
+        async fn exec(
             &self,
-            _exchange: &mut Exchange<'a, String, String, ()>,
+            _exchange: &mut Exchange<String, String, ()>,
         ) -> Result<HandlerStatus, Infallible> {
             Ok(HandlerStatus::new(ExchangeState::EXCHANGE_COMPLETED))
         }
@@ -347,7 +343,7 @@ mod tests {
 
     #[test]
     fn test_register_multiple_handlers_success() {
-        let mut registry = HandlerRegistry::<String, String, ()>::new();
+        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
 
         let handler1_id = HandlerId::new("handler_1");
         let handler1 = TestHandler::new("handler_1");
@@ -367,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_register_handler_with_conflicting_id() {
-        let mut registry = HandlerRegistry::<String, String, ()>::new();
+        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
         let handler_id = HandlerId::new("duplicate_handler");
 
         let handler1 = TestHandler::new("first_handler");
@@ -387,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_find_nonexistent_handler() {
-        let registry = HandlerRegistry::<String, String, ()>::new();
+        let registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
         let nonexistent_id = HandlerId::new("nonexistent_handler");
 
         let result = registry.find_with_id(&nonexistent_id);
@@ -397,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_find_handler_after_multiple_registrations() {
-        let mut registry = HandlerRegistry::<String, String, ()>::new();
+        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
 
         let handler1_id = HandlerId::new("handler_alpha");
         let handler1 = TestHandler::new("handler_alpha");
@@ -439,7 +435,7 @@ mod tests {
         use std::sync::Arc;
         use std::thread;
 
-        let mut registry = HandlerRegistry::<String, String, ()>::new();
+        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
 
         // Pre-register some handlers
         for i in 0..5 {
@@ -478,7 +474,7 @@ mod tests {
 
     #[test]
     fn test_empty_registry_operations() {
-        let registry = HandlerRegistry::<(), (), ()>::new();
+        let registry = HandlerRegistry::<Exchange<(), (), ()>>::new();
         let some_id = HandlerId::new("any_id");
         let result = registry.find_with_id(&some_id);
         assert!(result.is_err());

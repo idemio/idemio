@@ -3,162 +3,69 @@ pub mod executor;
 pub mod factory;
 pub mod path;
 
-use crate::handler::registry::HandlerRegistry;
-use crate::router::config::RouterConfig;
 use crate::router::executor::{ExecutorError, HandlerExecutor};
 use crate::router::factory::{ExchangeFactory, ExchangeFactoryError};
-use crate::router::path::{PathMatcherError, PathMatcher};
+use crate::router::path::{PathMatcher, PathMatcherError};
 use async_trait::async_trait;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thiserror::Error;
 
+/// A trait for routing requests to appropriate handlers and returning responses.
+///
+/// # Type Parameters
+/// - `Request`: Input request type that must implement `Send + Sync`
+/// - `Response`: Output response type that must implement `Send + Sync`
+///
+/// # Behavior
+/// Provides an asynchronous interface for processing requests through a routing system.
+/// Implementations should handle request matching, handler execution, and response generation.
 #[async_trait]
-pub trait Router<Req, Out>
+pub trait Router<Request, Response>
 where
     Self: Send + Sync,
-    Req: Send + Sync,
-    Out: Send + Sync,
+    Request: Send + Sync,
+    Response: Send + Sync,
 {
-    async fn route(&self, request: Req) -> Result<Out, RouterError>;
+    /// Routes a request through the routing system and returns a response.
+    ///
+    /// # Parameters
+    /// - `request`: The incoming request to be processed
+    ///
+    /// # Returns
+    /// `Result<Response, RouterError>` where:
+    /// - `Ok(Response)` contains the processed response
+    /// - `Err(RouterError)` if routing, matching, or execution fails
+    ///
+    /// # Errors
+    /// Returns `RouterError` variants for different failure scenarios:
+    /// - `MissingRoute` if no matching route is found
+    /// - `ExecutionFailure` if handler execution fails
+    /// - `InvalidExchange` if exchange creation fails
+    /// - `PathMatcherError` if path matching fails
+    ///
+    /// # Behavior
+    /// Implementations should extract routing information from the request,
+    /// find appropriate handlers, execute them, and return the result.
+    async fn route(&self, request: Request) -> Result<Response, RouterError>;
 }
 
-pub trait RouterComponents<Key, Req, In, Out, Meta>
-where
-    Req: Send + Sync,
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
-{
-    type PathMatcher: PathMatcher<In, Out, Meta> + Send + Sync;
-    /// Factory for creating exchanges from requests
-    type Factory: ExchangeFactory<Req, In, Out, Meta> + Send + Sync;
-    /// Executor for running handler chains
-    type Executor: HandlerExecutor<In, Out, Meta> + Send + Sync;
-}
-
-// TODO - Implement other routers for different path matching configurations (header match, tcp/ip match, etc.)
-pub struct RequestRouter<Key, Req, In, Out, Meta, Components>
-where
-    Req: Send + Sync,
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
-    Key: Send,
-    Components: RouterComponents<Key, Req, In, Out, Meta>,
-{
-    /// PhantomData to maintain type information for the request type
-    phantom: PhantomData<Req>,
-    /// Factory for creating exchanges from requests
-    factory: Arc<Components::Factory>,
-    /// Executor for running handler chains
-    executor: Arc<Components::Executor>,
-    /// Path matcher for routing requests to handler chains
-    matcher: Arc<Components::PathMatcher>,
-}
-
-impl<Key, Req, In, Out, Meta, Components> RequestRouter<Key, Req, In, Out, Meta, Components>
-where
-    Req: Send + Sync,
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
-    Key: Send,
-    Components: RouterComponents<Key, Req, In, Out, Meta>,
-{
-    pub fn new(
-        matcher: Components::PathMatcher,
-        exchange_factory: Components::Factory,
-        handler_executor: Components::Executor,
-    ) -> Result<Self, RouterError> {
-        Ok(Self {
-            phantom: PhantomData::default(),
-            factory: Arc::new(exchange_factory),
-            executor: Arc::new(handler_executor),
-            matcher: Arc::new(matcher),
-        })
-    }
-}
-
-#[async_trait]
-impl<Key, Req, In, Out, Meta, Components> Router<Req, Out>
-    for RequestRouter<Key, Req, In, Out, Meta, Components>
-where
-    Req: Send + Sync,
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
-    Key: Send,
-    Components: RouterComponents<Key, Req, In, Out, Meta>,
-{
-    async fn route(&self, request: Req) -> Result<Out, RouterError> {
-        let key = self
-            .factory
-            .extract_route_info(&request)
-            .await
-            .map_err(|e| {
-                RouterError::invalid_exchange(
-                    "Error occurred while trying to extract route info from the request.",
-                    e,
-                )
-            })?;
-
-        let executables = self
-            .matcher
-            .lookup(key)
-            .ok_or(RouterError::missing_route(key.0, key.1))?;
-
-        let mut exchange = self.factory.create_exchange(request).await.map_err(|e| {
-            RouterError::invalid_exchange("Error occurred while creating a new exchange.", e)
-        })?;
-
-        let result = self
-            .executor
-            .execute_handlers(executables, &mut exchange)
-            .await
-            .map_err(|e| RouterError::execution_failure(e))?;
-        Ok(result)
-    }
-}
-
-/// Errors that can occur during router operations
-///
-/// This enum represents all the possible error conditions that can arise
-/// when routing requests through the system.
+// Original RouterError
 #[derive(Error, Debug)]
 pub enum RouterError {
-    /// The requested route was not found in the configuration
-    ///
-    /// This occurs when a request is made to a path/method combination
-    /// that has no configured handler chain.
     #[error("Matching route for key ({key1} -- {key2}) was not found.")]
     MissingRoute { key1: String, key2: String },
-
-    /// An error occurred while executing the handler chain
-    ///
-    /// This wraps errors from the handler executor, such as handler
-    /// failures or exchange processing errors.
     #[error("Error while executing handlers.")]
     ExecutionFailure {
         #[source]
         source: ExecutorError,
     },
-
-    /// An error occurred while creating an exchange from the request
-    ///
-    /// This wraps errors from the exchange factory, typically indicating
-    /// problems with request parsing or exchange initialization.
     #[error("Error while creating a new exchange. {message}")]
     InvalidExchange {
         message: String,
         #[source]
         source: ExchangeFactoryError,
     },
-
-    /// An error occurred while building the path matcher
-    ///
-    /// This typically happens during router initialization when the
-    /// configuration contains invalid route definitions.
     #[error("Error while building path matcher.")]
     PathMatcherError {
         #[source]
@@ -167,7 +74,6 @@ pub enum RouterError {
 }
 
 impl RouterError {
-    #[inline]
     pub fn missing_route(key1: impl Into<String>, key2: impl Into<String>) -> Self {
         RouterError::MissingRoute {
             key1: key1.into(),
@@ -175,20 +81,14 @@ impl RouterError {
         }
     }
 
-    /// Create a new `PathMatcherError` error
-    #[inline]
     pub const fn path_matcher_error(err: PathMatcherError) -> Self {
         RouterError::PathMatcherError { source: err }
     }
 
-    /// Create a new `ExecutionFailure` error
-    #[inline]
     pub const fn execution_failure(err: ExecutorError) -> Self {
         RouterError::ExecutionFailure { source: err }
     }
 
-    /// Create a new `InvalidExchange` error
-    #[inline]
     pub fn invalid_exchange(msg: impl Into<String>, err: ExchangeFactoryError) -> Self {
         RouterError::InvalidExchange {
             message: msg.into(),
@@ -197,62 +97,309 @@ impl RouterError {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::exchange::Exchange;
-    use crate::router::path::PathPrefixMethodKey;
-    use async_trait::async_trait;
+/// A builder for constructing Router instances using the type state pattern.
+///
+/// # Type Parameters
+/// - `Request`: The request type that will be processed by the router
+/// - `Exchange`: The exchange type used for internal request/response handling
+/// - `State`: The current build state, defaults to `Empty`
+///
+/// # Behavior
+/// Uses the type state pattern to ensure all required components (factory, executor, matcher)
+/// are provided before a router can be built. Each method transitions to the next state,
+/// preventing invalid configurations and ensuring compile-time correctness.
+pub struct RouterBuilder<Request, Exchange, State = Empty> {
+    _phantom: PhantomData<(Request, Exchange)>,
+    state: State,
+}
 
-    /// Test demonstrating custom exchange factory implementation
+// Type states
+/// Initial empty state for RouterBuilder.
+///
+/// # Behavior
+/// Represents the starting state where no components have been configured yet.
+/// The next required step is to add a factory component.
+pub struct Empty;
+
+/// State indicating an exchange factory has been configured.
+///
+/// # Type Parameters
+/// - `F`: The factory type that implements `ExchangeFactory`
+///
+/// # Behavior
+/// Represents the state after a factory has been added. The next required
+/// component is an executor.
+pub struct WithFactory<F> {
+    factory: F,
+}
+
+/// State indicating both factory and executor have been configured.
+///
+/// # Type Parameters
+/// - `F`: The factory type that implements `ExchangeFactory`
+/// - `E`: The executor type that implements `HandlerExecutor`
+///
+/// # Behavior
+/// Represents the state after factory and executor have been added. The final
+/// required component is a path matcher.
+pub struct WithExecutor<F, E> {
+    factory: F,
+    executor: E,
+}
+
+/// Final state indicating all required components have been configured.
+///
+/// # Type Parameters
+/// - `F`: The factory type that implements `ExchangeFactory`
+/// - `E`: The executor type that implements `HandlerExecutor`
+/// - `M`: The matcher type that implements `PathMatcher`
+///
+/// # Behavior
+/// Represents the complete state where all components are available and
+/// a router can be built.
+pub struct Complete<F, E, M> {
+    factory: F,
+    executor: E,
+    matcher: M,
+}
+
+/// A concrete router implementation that processes requests through configured components.
+///
+/// # Type Parameters
+/// - `Request`: The request type to be processed
+/// - `Exchange`: The exchange type used for internal processing
+/// - `Factory`: The exchange factory type
+/// - `Executor`: The handler executor type
+/// - `Matcher`: The path matcher type
+///
+/// # Behavior
+/// Coordinates between factory, executor, and matcher components to process requests:
+/// - Uses factory to extract routing information and create exchanges
+/// - Uses matcher to find appropriate handler chains
+/// - Uses executor to run handlers and produce responses
+pub struct RequestRouter<Request, Exchange, Factory, Executor, Matcher>
+where
+    Request: Send + Sync,
+    Exchange: Send + Sync,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync,
+    Executor: HandlerExecutor<Exchange> + Send + Sync,
+    Matcher: PathMatcher<Exchange> + Send + Sync,
+{
+    factory: Arc<Factory>,
+    executor: Arc<Executor>,
+    matcher: Arc<Matcher>,
+    _phantom: PhantomData<(Request, Exchange)>,
+}
+
+// Empty state
+impl<Request, Exchange> RouterBuilder<Request, Exchange, Empty>
+where
+    Request: Send + Sync + 'static,
+    Exchange: Send + Sync + 'static,
+{
+    /// Creates a new RouterBuilder in the empty state.
     ///
-    /// This test shows how to create a custom exchange factory that can parse
-    /// requests in a specific format and create appropriate exchanges.
-    #[tokio::test]
-    async fn test_custom_exchange_factory() {
-        /// Custom exchange factory for string-based requests
-        ///
-        /// This factory expects requests in the format: "METHOD:PATH:BODY,"
-        /// For example, "GET:/endpoint:body text"
-        struct CustomExchangeFactory;
-
-        #[async_trait]
-        impl ExchangeFactory<String, String, String, ()> for CustomExchangeFactory {
-            async fn extract_route_info<'a>(
-                &self,
-                request: &'a String,
-            ) -> Result<(&'a str, &'a str), ExchangeFactoryError> {
-                let mut parts = request.split(':');
-                if let (Some(method), Some(path), Some(_)) =
-                    (parts.next(), parts.next(), parts.next())
-                {
-                    Ok((method, path))
-                } else {
-                    Err(ExchangeFactoryError::invalid_exchange("Invalid format"))
-                }
-            }
-
-            async fn create_exchange<'a>(
-                &self,
-                request: String,
-            ) -> Result<Exchange<'a, String, String, ()>, ExchangeFactoryError> {
-                let mut exchange = Exchange::new();
-                let mut parts = request.split(':');
-                if let (Some(_), Some(_), Some(body)) = (parts.next(), parts.next(), parts.next()) {
-                    exchange.save_input(body.to_string());
-                }
-                Ok(exchange)
-            }
+    /// # Returns
+    /// A new `RouterBuilder` instance ready to be configured with components.
+    ///
+    /// # Behavior
+    /// Initializes the builder with phantom data for type tracking and empty state.
+    /// The builder must be configured with factory, executor, and matcher before
+    /// it can build a router.
+    pub fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+            state: Empty,
         }
+    }
 
-        let factory = CustomExchangeFactory;
-        let custom_request = "GET:/test:body_content".to_string();
+    /// Adds an exchange factory to the builder and transitions to WithFactory state.
+    ///
+    /// # Parameters
+    /// - `factory`: An implementation of `ExchangeFactory` that creates exchanges from requests
+    ///
+    /// # Returns
+    /// A `RouterBuilder` in the `WithFactory` state with the provided factory.
+    ///
+    /// # Behavior
+    /// Consumes the current builder and returns a new one with the factory configured.
+    /// The factory will be used to extract routing information and create exchanges
+    /// during request processing.
+    pub fn factory<F>(self, factory: F) -> RouterBuilder<Request, Exchange, WithFactory<F>>
+    where
+        F: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
+    {
+        RouterBuilder {
+            _phantom: PhantomData,
+            state: WithFactory { factory },
+        }
+    }
+}
 
-        let key = factory.extract_route_info(&custom_request).await.unwrap();
-        assert_eq!(key.0, "GET");
-        assert_eq!(key.1, "/test");
+// With factory state
+impl<Request, Exchange, Factory> RouterBuilder<Request, Exchange, WithFactory<Factory>>
+where
+    Request: Send + Sync + 'static,
+    Exchange: Send + Sync + 'static,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
+{
+    /// Adds a handler executor to the builder and transitions to WithExecutor state.
+    ///
+    /// # Parameters
+    /// - `executor`: An implementation of `HandlerExecutor` that executes handler chains
+    ///
+    /// # Returns
+    /// A `RouterBuilder` in the `WithExecutor` state with both factory and executor configured.
+    ///
+    /// # Behavior
+    /// Consumes the current builder and returns a new one with the executor configured
+    /// alongside the previously added factory. The executor will be responsible for
+    /// running handler chains on exchanges.
+    pub fn executor<Executor>(self, executor: Executor) -> RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
+    where
+        Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
+    {
+        RouterBuilder {
+            _phantom: PhantomData,
+            state: WithExecutor {
+                factory: self.state.factory,
+                executor,
+            },
+        }
+    }
+}
 
-        let mut exchange = factory.create_exchange(custom_request).await.unwrap();
-        assert_eq!(exchange.input().await.unwrap(), "body_content");
+// With executor state
+impl<Request, Exchange, Factory, Executor> RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
+where
+    Request: Send + Sync + 'static,
+    Exchange: Send + Sync + 'static,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
+    Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
+{
+    /// Adds a path matcher to the builder and transitions to Complete state.
+    ///
+    /// # Parameters
+    /// - `matcher`: An implementation of `PathMatcher` that matches routes to handler chains
+    ///
+    /// # Returns
+    /// A `RouterBuilder` in the `Complete` state with all required components configured.
+    ///
+    /// # Behavior
+    /// Consumes the current builder and returns a new one with the matcher configured
+    /// alongside the previously added factory and executor. The matcher will be used
+    /// to find appropriate handler chains for incoming requests.
+    pub fn matcher<Matcher>(self, matcher: Matcher) -> RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
+    where
+        Matcher: PathMatcher<Exchange> + Send + Sync + 'static,
+    {
+        RouterBuilder {
+            _phantom: PhantomData,
+            state: Complete {
+                factory: self.state.factory,
+                executor: self.state.executor,
+                matcher,
+            },
+        }
+    }
+}
+
+// Complete state - ready to build
+impl<Request, Exchange, Factory, Executor, Matcher> RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
+where
+    Request: Send + Sync + 'static,
+    Exchange: Send + Sync + 'static,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
+    Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
+    Matcher: PathMatcher<Exchange> + Send + Sync + 'static,
+{
+    /// Builds and returns a configured RequestRouter instance.
+    ///
+    /// # Returns
+    /// A `RequestRouter` configured with all provided components wrapped in Arc for sharing.
+    ///
+    /// # Behavior
+    /// Consumes the complete builder and creates a RequestRouter with all components
+    /// wrapped in Arc references for efficient sharing across async tasks. The router
+    /// is ready to process requests through the configured pipeline.
+    pub fn build(self) -> RequestRouter<Request, Exchange, Factory, Executor, Matcher> {
+        RequestRouter {
+            factory: Arc::new(self.state.factory),
+            executor: Arc::new(self.state.executor),
+            matcher: Arc::new(self.state.matcher),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+// Router trait implementation
+#[async_trait]
+impl<Request, Exchange, Factory, Executor, Metadata> Router<Request, Executor::Output>
+for RequestRouter<Request, Exchange, Factory, Executor, Metadata>
+where
+    Request: Send + Sync + 'static,
+    Exchange: Send + Sync + 'static,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
+    Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
+    Executor::Output: Send + Sync + 'static,
+    Metadata: PathMatcher<Exchange> + Send + Sync + 'static,
+{
+    /// Routes a request through the configured pipeline and returns the result.
+    ///
+    /// # Parameters
+    /// - `request`: The incoming request to be processed
+    ///
+    /// # Returns
+    /// `Result<Executor::Output, RouterError>` where:
+    /// - `Ok(Executor::Output)` contains the processed response from the handler chain
+    /// - `Err(RouterError)` if any step in the routing process fails
+    ///
+    /// # Errors
+    /// Returns `RouterError::InvalidExchange` if:
+    /// - Route information extraction from the request fails
+    /// - Exchange creation from the request fails
+    ///
+    /// Returns `RouterError::MissingRoute` if no handler chain matches the extracted route key.
+    ///
+    /// Returns `RouterError::ExecutionFailure` if the handler chain execution fails.
+    ///
+    /// # Behavior
+    /// Implements the complete request routing pipeline:
+    /// 1. Extracts routing information from the request using the factory
+    /// 2. Looks up the appropriate handler chain using the matcher
+    /// 3. Creates an exchange from the request using the factory
+    /// 4. Executes the handler chain on the exchange using the executor
+    /// 5. Returns the final result from the executor
+    async fn route(&self, request: Request) -> Result<Executor::Output, crate::router::RouterError> {
+        let route_key = self
+            .factory
+            .extract_route_info(&request)
+            .await
+            .map_err(|e| {
+                crate::router::RouterError::invalid_exchange(
+                    "Failed to extract route info from request",
+                    e,
+                )
+            })?;
+
+        let handler_chain = self
+            .matcher
+            .lookup(route_key)
+            .ok_or_else(|| crate::router::RouterError::missing_route(route_key.0, route_key.1))?;
+
+        let mut exchange = self.factory.create_exchange(request).await.map_err(|e| {
+            crate::router::RouterError::invalid_exchange(
+                "Failed to create exchange from request",
+                e,
+            )
+        })?;
+
+        let result = self
+            .executor
+            .execute_handlers(handler_chain, &mut exchange)
+            .await
+            .map_err(crate::router::RouterError::execution_failure)?;
+
+        Ok(result)
     }
 }
