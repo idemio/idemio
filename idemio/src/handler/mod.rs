@@ -6,21 +6,17 @@ use std::hash::{Hash, Hasher};
 use crate::status::{HandlerStatus};
 use async_trait::async_trait;
 use std::sync::Arc;
-use crate::exchange::Exchange;
 
-pub type SharedBufferedHandler<I, O, M> = Arc<dyn Handler<I, O, M>>;
+pub type SharedBufferedHandler<E> = Arc<dyn Handler<E>>;
 
 #[async_trait]
-pub trait Handler<In, Out, Meta>
+pub trait Handler<E>: Send + Sync
 where
-    Self: Send + Sync,
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
+    E: Send + Sync
 {
-    async fn exec<'a>(
+    async fn exec(
         &self,
-        exchange: &mut Exchange<'a, In, Out, Meta>,
+        exchange: &mut E,
     ) -> Result<HandlerStatus, Infallible>;
     
     fn name(&self) -> &str;

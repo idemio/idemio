@@ -17,10 +17,10 @@ use std::hint::black_box;
 struct DummyHandler;
 
 #[async_trait]
-impl Handler<(), (), ()> for DummyHandler {
-    async fn exec<'a>(
+impl Handler<Exchange<(), (), ()>> for DummyHandler {
+    async fn exec(
         &self,
-        _exchange: &mut Exchange<'a, (), (), ()>,
+        _exchange: &mut Exchange<(), (), ()>,
     ) -> Result<HandlerStatus, Infallible> {
         Ok(HandlerStatus::new(ExchangeState::OK))
     }
@@ -32,7 +32,7 @@ impl Handler<(), (), ()> for DummyHandler {
 
 fn create_populated_dynamic_route_table_v2(
     num_routes: usize,
-) -> PathPrefixMethodPathMatcher<(), (), ()> {
+) -> PathPrefixMethodPathMatcher<Exchange<(), (), ()>> {
     let mut registry = HandlerRegistry::new();
     registry
         .register_handler(HandlerId::new("test1"), DummyHandler)

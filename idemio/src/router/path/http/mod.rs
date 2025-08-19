@@ -29,28 +29,24 @@ impl<'a> PathPrefixMethodKey<'a> {
     }
 }
 
-pub struct PathPrefixMethodPathMatcher<In, Out, Meta>
+pub struct PathPrefixMethodPathMatcher<E>
 where
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
+    E: Send + Sync
 {
     /// Fast hash-based lookup for static paths (no wildcards)
-    static_paths: HashMap<StaticPathKey, Arc<LoadedChain<In, Out, Meta>>, FnvBuildHasher>,
+    static_paths: HashMap<StaticPathKey, Arc<LoadedChain<E>>, FnvBuildHasher>,
     /// Tree structure for dynamic path matching with wildcards
-    nodes: PathNode<In, Out, Meta>,
+    nodes: PathNode<E>,
 }
 
-impl<In, Out, Meta> PathMatcher<In, Out, Meta> for PathPrefixMethodPathMatcher<In, Out, Meta>
+impl<E> PathMatcher<E> for PathPrefixMethodPathMatcher<E>
 where
-    In: Send + Sync,
-    Out: Send + Sync,
-    Meta: Send + Sync,
+    E: Send + Sync
 {
     fn parse_config(
         &mut self,
         route_config: &RouterConfig,
-        handler_registry: &HandlerRegistry<In, Out, Meta>,
+        handler_registry: &HandlerRegistry<E>,
     ) -> Result<(), PathMatcherError> {
         match &route_config.routes {
             Routes::HttpRequestPaths(paths) => {
@@ -119,7 +115,7 @@ where
         }
     }
 
-    fn lookup(&self, key: (&str, &str)) -> Option<Arc<LoadedChain<In, Out, Meta>>> {
+    fn lookup(&self, key: (&str, &str)) -> Option<Arc<LoadedChain<E>>> {
         let request_path = key.0;
         let request_method = key.1;
         // Fast path: try the exact static match first
@@ -132,7 +128,7 @@ where
 
         // Dynamic path matching with wildcards
         let req_path_segments = split_path(&request_path);
-        let mut best_match: Option<&PathNode<In, Out, Meta>> = None;
+        let mut best_match: Option<&PathNode<E>> = None;
         let mut max_depth = 0;
         let mut current_node = &self.nodes;
 
@@ -168,7 +164,7 @@ where
 
     fn new(
         config: &RouterConfig,
-        handler_registry: &HandlerRegistry<In, Out, Meta>,
+        handler_registry: &HandlerRegistry<E>,
     ) -> Result<Self, PathMatcherError> {
         let mut matcher = Self {
             nodes: PathNode::default(),
@@ -204,10 +200,10 @@ mod test {
     struct DummyHandler;
 
     #[async_trait]
-    impl Handler<(), (), ()> for DummyHandler {
-        async fn exec<'a>(
+    impl Handler<Exchange<(), (), ()>> for DummyHandler {
+        async fn exec(
             &self,
-            _exchange: &mut Exchange<'a, (), (), ()>,
+            _exchange: &mut Exchange<(), (), ()>,
         ) -> Result<HandlerStatus, Infallible> {
             Ok(HandlerStatus::new(ExchangeState::OK))
         }
@@ -230,7 +226,7 @@ mod test {
     #[rustfmt::skip]
     fn router_v2_test() {
         // Set up a handler registry with test handlers
-        let mut registry = HandlerRegistry::<(), (), ()>::new();
+        let mut registry = HandlerRegistry::<Exchange<(), (), ()>>::new();
         registry
             .register_handler(HandlerId::new("test1"), DummyHandler)
             .unwrap();
