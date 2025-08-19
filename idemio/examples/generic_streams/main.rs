@@ -26,7 +26,8 @@ use idemio::router::config::builder::{
 };
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
+use idemio::router::path::PathMatcher;
+use idemio::router::path::http::{PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;

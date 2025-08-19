@@ -23,23 +23,23 @@ use idemio::router::config::builder::{
 };
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
+use idemio::router::path::PathMatcher;
+use idemio::router::path::http::{PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 use idemio::router::{RequestRouter, Router, RouterComponents, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
-use idemio::router::path::{PathMatcher, PathPrefixMethodKey, PathPrefixMethodPathMatcher};
 
-// Define the RouterComponents implementation for Hyper
 // Define the RouterComponents implementation for Hyper
 struct HyperComponents;
 
 impl
-RouterComponents<
-    PathPrefixMethodKey<'_>,
-    Request<Incoming>,
-    Bytes,
-    BoxBody<Bytes, std::io::Error>,
-    Parts,
-> for HyperComponents
+    RouterComponents<
+        PathPrefixMethodKey<'_>,
+        Request<Incoming>,
+        Bytes,
+        BoxBody<Bytes, std::io::Error>,
+        Parts,
+    > for HyperComponents
 {
     type PathMatcher = PathPrefixMethodPathMatcher<Bytes, BoxBody<Bytes, std::io::Error>, Parts>;
     type Factory = HyperExchangeFactory;
@@ -286,8 +286,8 @@ async fn handle_request(
             // Handle routing errors
             println!("Error handling request: {}", e);
             let (status_code, error_message) = match e {
-                RouterError::MissingRoute{..} => (404, "Route not found"),
-                RouterError::InvalidExchange{..} => (400, "Bad request"),
+                RouterError::MissingRoute { .. } => (404, "Route not found"),
+                RouterError::InvalidExchange { .. } => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
 

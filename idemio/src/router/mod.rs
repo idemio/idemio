@@ -14,41 +14,40 @@ use std::sync::Arc;
 use thiserror::Error;
 
 #[async_trait]
-pub trait Router<Req, Out>
+pub trait Router<Src, Out>
 where
     Self: Send + Sync,
-    Req: Send + Sync,
+    Src: Send + Sync,
     Out: Send + Sync,
 {
-    async fn route(&self, request: Req) -> Result<Out, RouterError>;
+    async fn route(&self, request: Src) -> Result<Out, RouterError>;
 }
 
-pub trait RouterComponents<Key, Req, In, Out, Meta>
+pub trait RouterComponents<Key, Src, In, Out, Meta>
 where
-    Req: Send + Sync,
+    Src: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
 {
     type PathMatcher: PathMatcher<In, Out, Meta> + Send + Sync;
     /// Factory for creating exchanges from requests
-    type Factory: ExchangeFactory<Req, In, Out, Meta> + Send + Sync;
+    type Factory: ExchangeFactory<Src, In, Out, Meta> + Send + Sync;
     /// Executor for running handler chains
     type Executor: HandlerExecutor<In, Out, Meta> + Send + Sync;
 }
 
-// TODO - Implement other routers for different path matching configurations (header match, tcp/ip match, etc.)
-pub struct RequestRouter<Key, Req, In, Out, Meta, Components>
+pub struct RequestRouter<Key, Src, In, Out, Meta, Components>
 where
-    Req: Send + Sync,
+    Src: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
     Key: Send,
-    Components: RouterComponents<Key, Req, In, Out, Meta>,
+    Components: RouterComponents<Key, Src, In, Out, Meta>,
 {
     /// PhantomData to maintain type information for the request type
-    phantom: PhantomData<Req>,
+    phantom: PhantomData<Src>,
     /// Factory for creating exchanges from requests
     factory: Arc<Components::Factory>,
     /// Executor for running handler chains
@@ -57,14 +56,14 @@ where
     matcher: Arc<Components::PathMatcher>,
 }
 
-impl<Key, Req, In, Out, Meta, Components> RequestRouter<Key, Req, In, Out, Meta, Components>
+impl<Key, Src, In, Out, Meta, Components> RequestRouter<Key, Src, In, Out, Meta, Components>
 where
-    Req: Send + Sync,
+    Src: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
     Key: Send,
-    Components: RouterComponents<Key, Req, In, Out, Meta>,
+    Components: RouterComponents<Key, Src, In, Out, Meta>,
 {
     pub fn new(
         matcher: Components::PathMatcher,
@@ -81,17 +80,17 @@ where
 }
 
 #[async_trait]
-impl<Key, Req, In, Out, Meta, Components> Router<Req, Out>
-    for RequestRouter<Key, Req, In, Out, Meta, Components>
+impl<Key, Src, In, Out, Meta, Components> Router<Src, Out>
+    for RequestRouter<Key, Src, In, Out, Meta, Components>
 where
-    Req: Send + Sync,
+    Src: Send + Sync,
     In: Send + Sync,
     Out: Send + Sync,
     Meta: Send + Sync,
     Key: Send,
-    Components: RouterComponents<Key, Req, In, Out, Meta>,
+    Components: RouterComponents<Key, Src, In, Out, Meta>,
 {
-    async fn route(&self, request: Req) -> Result<Out, RouterError> {
+    async fn route(&self, request: Src) -> Result<Out, RouterError> {
         let key = self
             .factory
             .extract_route_info(&request)
@@ -201,7 +200,7 @@ impl RouterError {
 mod tests {
     use super::*;
     use crate::exchange::Exchange;
-    use crate::router::path::PathPrefixMethodKey;
+    use crate::router::path::http::PathPrefixMethodKey;
     use async_trait::async_trait;
 
     /// Test demonstrating custom exchange factory implementation
