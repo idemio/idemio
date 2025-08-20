@@ -23,7 +23,7 @@ use idemio::router::config::builder::{
 };
 use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::hyper::HyperExchangeFactory;
-use idemio::router::path::http::PathPrefixMethodPathMatcher;
+use idemio::router::path::http::HttpPathMethodMatcher;
 use idemio::router::{Router, RouterBuilder, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use tokio::net::TcpListener;
@@ -35,7 +35,7 @@ type HyperRouter = idemio::router::RequestRouter<
     Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
     HyperExchangeFactory,
     DefaultExecutor<BoxBody<Bytes, std::io::Error>>,
-    PathPrefixMethodPathMatcher<
+    HttpPathMethodMatcher<
         Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>
     >,
 >;
@@ -277,7 +277,7 @@ fn create_router() -> HyperRouter {
         .build();
 
     // Create the router using the new RouterBuilder with type state pattern
-    let matcher = PathPrefixMethodPathMatcher::new(&router_config, &handler_registry).unwrap();
+    let matcher = HttpPathMethodMatcher::new(&router_config, &handler_registry).unwrap();
     let executor = DefaultExecutor { _phantom: std::marker::PhantomData::<BoxBody<Bytes, std::io::Error>>::default() };
     let factory = HyperExchangeFactory;
 
