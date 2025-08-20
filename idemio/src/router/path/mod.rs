@@ -1,30 +1,10 @@
-
 pub mod http;
 
-use std::collections::HashMap;
-use std::convert::Infallible;
-use std::fmt::{Display, Formatter};
-use std::hash::{Hash, Hasher};
-use std::iter::Filter;
-use std::str::{FromStr, Split};
-use std::sync::Arc;
-use fnv::{FnvBuildHasher, FnvHasher};
-use thiserror::Error;
-use crate::handler::{Handler, HandlerId};
 use crate::handler::registry::{HandlerRegistry, HandlerRegistryError};
+use crate::handler::{Handler, HandlerId};
 use crate::router::config::{PathChain, RouterConfig};
-
-/// Splits a path string into individual segments, filtering out empty segments.
-///
-/// # Parameters
-/// - `path`: Path string to split (e.g., "/api/v1/users", "/health")
-///
-/// # Returns
-/// An iterator over non-empty path segments. Leading and trailing slashes are ignored,
-/// and consecutive slashes are treated as a single separator.
-fn split_path(path: &str) -> Filter<Split<char>, fn(&&str) -> bool> {
-    path.split('/').filter(|s| !s.is_empty())
-}
+use std::sync::Arc;
+use thiserror::Error;
 
 /// Errors that can occur during PathMatcher construction and operation.
 #[derive(Error, Debug)]
@@ -94,7 +74,7 @@ where
 
 impl<E> LoadedChain<E>
 where
-    E: Send + Sync
+    E: Send + Sync,
 {
     /// Creates a new `LoadedChain` with the specified handlers.
     ///
@@ -172,165 +152,10 @@ where
     }
 }
 
-/// A key used for fast lookup of static paths (paths without wildcards) in the router.
-///
-/// # Behavior
-/// This is an internal optimization structure that uses FNV hashing for efficient
-/// method and path combination lookups. Static paths can be resolved in O(1) time
-/// using hash table lookups rather than tree traversal.
-///
-/// FNV hashing is chosen for its speed and good distribution characteristics for
-/// short strings like HTTP methods and URL paths.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct StaticPathKey {
-    /// Hash of the HTTP method string (e.g., "GET", "POST")
-    method_hash: u64,
-    /// Hash of the URL path string (e.g., "/api/users")
-    path_hash: u64,
-}
-
-impl StaticPathKey {
-    /// Creates a new StaticPathKey from method and path strings.
-    ///
-    /// # Parameters
-    /// - `method`: HTTP method string (e.g., "GET", "POST", "PUT", "DELETE")
-    /// - `path`: URL path string (e.g., "/api/users", "/health", "/api/v1/orders")
-    ///
-    /// # Returns
-    /// A new StaticPathKey with hashed method and path values for fast comparison.
-    ///
-    /// # Behavior
-    /// Performs two FNV hash calculations, which are very fast operations.
-    /// The resulting key can be used for O(1) hash table lookups.
-    pub fn new(method: impl AsRef<str>, path: impl AsRef<str>) -> Self {
-        let path = path.as_ref();
-        let method = method.as_ref();
-        let mut path_hasher = FnvHasher::default();
-        path.hash(&mut path_hasher);
-        let path_hash = path_hasher.finish();
-        let mut method_hasher = FnvHasher::default();
-        method.hash(&mut method_hasher);
-        let method_hash = method_hasher.finish();
-        Self {
-            method_hash,
-            path_hash,
-        }
-    }
-}
-
-/// Represents a segment in a URL path, which can be either a static text or a wildcard.
-///
-/// # Behavior
-/// Path segments are the building blocks of the routing tree structure used for
-/// dynamic path matching. Each segment in a URL path (separated by '/') becomes
-/// a PathSegment in the routing tree.
-///
-/// Wildcard behavior:
-/// - `Static` segments must match exactly
-/// - `Any` segments (wildcards) match any single path segment
-/// - Wildcards use longest-prefix matching when multiple patterns could apply
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub enum PathSegment {
-    /// A static path segment containing literal text that must match exactly.
-    ///
-    /// # Behavior
-    /// Static segments require exact string matching during route resolution.
-    Static(String),
-
-    /// A wildcard segment that matches any single path segment value.
-    ///
-    /// # Behavior
-    /// Represented by "*" in path patterns. Matches exactly one path segment,
-    /// not multiple segments or empty segments.
-    Any,
-}
-
-impl Display for PathSegment {
-    /// Formats the path segment for display purposes.
-    ///
-    /// # Returns
-    /// - Static segments return their contained string
-    /// - Any segments return "*"
-    ///
-    /// # Behavior
-    /// Provides a human-readable representation of the path segment.
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PathSegment::Static(s) => write!(f, "{}", s),
-            PathSegment::Any => write!(f, "*"),
-        }
-    }
-}
-
-impl FromStr for PathSegment {
-    type Err = Infallible;
-
-    /// Parses a string into a PathSegment.
-    ///
-    /// # Parameters
-    /// - `s`: String slice to parse. "*" creates a wildcard, anything else creates a static segment.
-    ///
-    /// # Returns
-    /// Always succeeds with either `PathSegment::Any` for "*" or `PathSegment::Static` for other values.
-    /// This operation is infallible as any string can be converted to a path segment.
-    ///
-    /// # Behavior
-    /// Converts string representations into strongly-typed path segments for routing tree construction.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "*" {
-            Ok(PathSegment::Any)
-        } else {
-            Ok(PathSegment::Static(s.to_string()))
-        }
-    }
-}
-
-/// A node in the path routing tree structure.
-///
-/// # Behavior
-/// Each node represents a path segment and can contain:
-/// - Child nodes for deeper path segments
-/// - Method handlers for HTTP methods at this path depth
-/// - Depth information for longest-prefix matching
-///
-/// The tree structure allows efficient matching of both static and dynamic paths.
-/// Uses FNV hashing for fast child node and method lookups.
-struct PathNode<E>
-where
-    E: Send + Sync
-{
-    /// Child nodes indexed by path segment (static text or wildcard)
-    children: HashMap<PathSegment, PathNode<E>, FnvBuildHasher>,
-    /// Depth of this node in the routing tree (0 = root)
-    segment_depth: u64,
-    /// HTTP method handlers available at this path depth
-    methods: HashMap<String, Arc<LoadedChain<E>>, FnvBuildHasher>,
-}
-
-impl<E> Default for PathNode<E>
-where
-    E: Send + Sync
-{
-    /// Creates a new empty PathNode with default FNV-hashed collections.
-    ///
-    /// # Returns
-    /// A new `PathNode` with empty children and methods collections, and depth set to 0.
-    ///
-    /// # Behavior
-    /// Initializes the node with FNV hashers for optimal performance with string keys.
-    fn default() -> Self {
-        Self {
-            children: HashMap::with_hasher(FnvBuildHasher::default()),
-            methods: HashMap::with_hasher(FnvBuildHasher::default()),
-            segment_depth: 0,
-        }
-    }
-}
-
 /// A trait for matching URL paths to handler chains in the routing system.
 ///
 /// # Type Parameters
-/// - `E`: The exchange type that will be processed by the matched handlers
+/// - `Exchange`: The exchange type that will be processed by the matched handlers
 ///
 /// # Behavior
 /// Implementations provide path-to-handler mapping functionality with support for:
@@ -339,9 +164,9 @@ where
 /// - HTTP method-based routing
 /// - Handler chain resolution and loading
 /// - Configuration parsing from routing definitions
-pub trait PathMatcher<E>
+pub trait PathMatcher<Exchange>
 where
-    E: Send + Sync
+    Exchange: Send + Sync,
 {
     /// Parses router configuration and populates the matcher with routes.
     ///
@@ -365,7 +190,7 @@ where
     fn parse_config(
         &mut self,
         route_config: &RouterConfig,
-        handler_registry: &HandlerRegistry<E>,
+        handler_registry: &HandlerRegistry<Exchange>,
     ) -> Result<(), PathMatcherError>;
 
     /// Looks up a handler chain for the given path and method combination.
@@ -383,7 +208,7 @@ where
     /// Searches the internal routing structures to find the best matching handler chain.
     /// Supports both exact static matches and wildcard pattern matching with
     /// longest-prefix matching for ambiguous cases.
-    fn lookup(&self, key: (&str, &str)) -> Option<Arc<LoadedChain<E>>>;
+    fn lookup(&self, key: (&str, &str)) -> Option<Arc<LoadedChain<Exchange>>>;
 
     /// Creates a new PathMatcher instance from configuration and handler registry.
     ///
@@ -404,7 +229,7 @@ where
     /// This is a convenience method that combines instantiation and configuration.
     fn new(
         config: &RouterConfig,
-        handler_registry: &HandlerRegistry<E>,
+        handler_registry: &HandlerRegistry<Exchange>,
     ) -> Result<Self, PathMatcherError>
     where
         Self: Sized;
@@ -428,8 +253,8 @@ where
     /// This is a utility method for handler resolution during configuration parsing.
     fn find_in_registry(
         handler: &str,
-        handler_registry: &HandlerRegistry<E>,
-    ) -> Result<Arc<dyn Handler<E>>, PathMatcherError> {
+        handler_registry: &HandlerRegistry<Exchange>,
+    ) -> Result<Arc<dyn Handler<Exchange>>, PathMatcherError> {
         let handler_id = HandlerId::new(handler);
         match handler_registry.find_with_id(&handler_id) {
             Ok(handler) => Ok(handler),
@@ -449,7 +274,7 @@ where
     /// - `Err(PathMatcherError)` if any handler is not found
     ///
     /// # Errors
-    /// Returns `PathMatcherError::HandlerRegistryError` if any handler is not registered.
+    /// `PathMatcherError::HandlerRegistryError` if any handler is not registered.
     /// The operation fails fast on the first missing handler.
     ///
     /// # Behavior
@@ -457,8 +282,8 @@ where
     /// Used for loading handler chains that contain multiple handlers.
     fn find_all_in_registry(
         handlers: &[String],
-        handler_registry: &HandlerRegistry<E>,
-    ) -> Result<Vec<Arc<dyn Handler<E>>>, PathMatcherError> {
+        handler_registry: &HandlerRegistry<Exchange>,
+    ) -> Result<Vec<Arc<dyn Handler<Exchange>>>, PathMatcherError> {
         let mut registered_handlers = vec![];
         for handler in handlers {
             let registered_handler = Self::find_in_registry(handler, handler_registry)?;
@@ -479,8 +304,8 @@ where
     /// - `Err(PathMatcherError)` if handler loading fails
     ///
     /// # Errors
-    /// Returns `PathMatcherError::InvalidMethod` if no termination handler is specified.
-    /// Returns `PathMatcherError::HandlerRegistryError` if any referenced handler is missing.
+    /// - `PathMatcherError::InvalidMethod` if no termination handler is specified.
+    /// - `PathMatcherError::HandlerRegistryError` if any referenced handler is missing.
     ///
     /// # Behavior
     /// Processes a PathChain configuration to:
@@ -489,9 +314,9 @@ where
     /// 3. Load optional response handlers from registry
     /// 4. Construct and return a complete LoadedChain
     fn load_handlers(
-        handler_registry: &HandlerRegistry<E>,
+        handler_registry: &HandlerRegistry<Exchange>,
         path_chain: &PathChain,
-    ) -> Result<LoadedChain<E>, PathMatcherError> {
+    ) -> Result<LoadedChain<Exchange>, PathMatcherError> {
         let registered_request_handlers = match &path_chain.request_handlers {
             Some(handlers) => Self::find_all_in_registry(handlers, handler_registry)?,
             None => vec![],

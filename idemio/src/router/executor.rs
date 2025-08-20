@@ -4,6 +4,7 @@ use crate::status::ExchangeState;
 use async_trait::async_trait;
 use std::sync::Arc;
 use thiserror::Error;
+use crate::handler::Handler;
 
 /// A trait for executing handler chains in an asynchronous request/response processing system.
 ///
@@ -17,6 +18,24 @@ where
 {
     /// The output type that this executor returns after processing
     type Output: Send + Sync;
+
+    // TODO - look into making return status generic. Different runtimes might require different status returns.
+    async fn execute_handler(handlers: &Vec<Arc<dyn Handler<Exchange>>>, exchange: &mut Exchange) -> Result<bool, ExecutorError>
+    where
+        Exchange: ExtractOutput<Self::Output> + Send + Sync,
+    {
+        for handler in handlers {
+            let status = handler.exec(exchange).await.unwrap();
+            if status.code.is_in_flight() {
+                continue;
+            } else if status.code.is_completed() || status.code.is_error() {
+                return Ok(true);
+            } else {
+                return Err(ExecutorError::unknown_exchange_state(status.code));
+            }
+        }
+        Ok(false)
+    }
 
     async fn execute_handlers(
         &self,
@@ -71,20 +90,14 @@ where
         exchange: &mut E,
     ) -> Result<Self::Output, ExecutorError> {
         let request_handlers = executables.request_handlers();
-        for handler in request_handlers {
-            let status = handler.exec(exchange).await.unwrap();
-            if status.code.is_in_flight() {
-                continue;
-            } else if status.code.is_completed() || status.code.is_error() {
-                return Ok(Self::return_output(exchange).await?);
-            } else {
-                return Err(ExecutorError::unknown_exchange_state(status.code));
-            }
+        let request_handlers_result = Self::execute_handler(&request_handlers, exchange).await?;
+
+        // Early exit
+        if request_handlers_result {
+            return Ok(Self::return_output(exchange).await?);
         }
 
-        // Execute termination handler
         let termination_handler = executables.termination_handler();
-        // Handler result is Infallible, so unwrap is safe
         let status = termination_handler.exec(exchange).await.unwrap();
         if status.code.is_completed() || status.code.is_error() {
             return Ok(Self::return_output(exchange).await?);
@@ -92,21 +105,8 @@ where
             return Err(ExecutorError::unknown_exchange_state(status.code));
         }
 
-        // Execute response handlers in sequence
         let response_handlers = executables.response_handlers();
-        for handler in response_handlers {
-            // Handler result is Infallible, so unwrap is safe
-            let status = handler.exec(exchange).await.unwrap();
-            if status.code.is_in_flight() {
-                continue;
-            } else if status.code.is_completed() || status.code.is_error() {
-                return Ok(Self::return_output(exchange).await?);
-            } else {
-                return Err(ExecutorError::unknown_exchange_state(status.code));
-            }
-        }
-
-        // Final output extraction if all handlers returned in_flight
+        Self::execute_handler(&response_handlers, exchange).await?;
         exchange
             .extract_output()
             .await

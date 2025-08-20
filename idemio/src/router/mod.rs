@@ -8,7 +8,6 @@ use crate::router::factory::{ExchangeFactory, ExchangeFactoryError};
 use crate::router::path::{PathMatcher, PathMatcherError};
 use async_trait::async_trait;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use thiserror::Error;
 
 /// A trait for routing requests to appropriate handlers and returning responses.
@@ -38,7 +37,7 @@ where
     /// - `Err(RouterError)` if routing, matching, or execution fails
     ///
     /// # Errors
-    /// Returns `RouterError` variants for different failure scenarios:
+    /// `RouterError` variants for different failure scenarios:
     /// - `MissingRoute` if no matching route is found
     /// - `ExecutionFailure` if handler execution fails
     /// - `InvalidExchange` if exchange creation fails
@@ -74,6 +73,8 @@ pub enum RouterError {
 }
 
 impl RouterError {
+
+    #[inline]
     pub fn missing_route(key1: impl Into<String>, key2: impl Into<String>) -> Self {
         RouterError::MissingRoute {
             key1: key1.into(),
@@ -81,14 +82,17 @@ impl RouterError {
         }
     }
 
+    #[inline]
     pub const fn path_matcher_error(err: PathMatcherError) -> Self {
         RouterError::PathMatcherError { source: err }
     }
 
+    #[inline]
     pub const fn execution_failure(err: ExecutorError) -> Self {
         RouterError::ExecutionFailure { source: err }
     }
 
+    #[inline]
     pub fn invalid_exchange(msg: impl Into<String>, err: ExchangeFactoryError) -> Self {
         RouterError::InvalidExchange {
             message: msg.into(),
@@ -124,43 +128,43 @@ pub struct Empty;
 /// State indicating an exchange factory has been configured.
 ///
 /// # Type Parameters
-/// - `F`: The factory type that implements `ExchangeFactory`
+/// - `Factory`: The factory type that implements `ExchangeFactory`
 ///
 /// # Behavior
 /// Represents the state after a factory has been added. The next required
 /// component is an executor.
-pub struct WithFactory<F> {
-    factory: F,
+pub struct WithFactory<Factory> {
+    factory: Factory,
 }
 
 /// State indicating both factory and executor have been configured.
 ///
 /// # Type Parameters
-/// - `F`: The factory type that implements `ExchangeFactory`
-/// - `E`: The executor type that implements `HandlerExecutor`
+/// - `Factory`: The factory type that implements `ExchangeFactory`
+/// - `Executor`: The executor type that implements `HandlerExecutor`
 ///
 /// # Behavior
 /// Represents the state after factory and executor have been added. The final
 /// required component is a path matcher.
-pub struct WithExecutor<F, E> {
-    factory: F,
-    executor: E,
+pub struct WithExecutor<Factory, Executor> {
+    factory: Factory,
+    executor: Executor,
 }
 
 /// Final state indicating all required components have been configured.
 ///
 /// # Type Parameters
-/// - `F`: The factory type that implements `ExchangeFactory`
-/// - `E`: The executor type that implements `HandlerExecutor`
-/// - `M`: The matcher type that implements `PathMatcher`
+/// - `Factory`: The factory type that implements `ExchangeFactory`
+/// - `Executor`: The executor type that implements `HandlerExecutor`
+/// - `Matcher`: The matcher type that implements `PathMatcher`
 ///
 /// # Behavior
 /// Represents the complete state where all components are available and
 /// a router can be built.
-pub struct Complete<F, E, M> {
-    factory: F,
-    executor: E,
-    matcher: M,
+pub struct Complete<Factory, Executor, Matcher> {
+    factory: Factory,
+    executor: Executor,
+    matcher: Matcher,
 }
 
 /// A concrete router implementation that processes requests through configured components.
@@ -185,17 +189,17 @@ where
     Executor: HandlerExecutor<Exchange> + Send + Sync,
     Matcher: PathMatcher<Exchange> + Send + Sync,
 {
-    factory: Arc<Factory>,
-    executor: Arc<Executor>,
-    matcher: Arc<Matcher>,
+    factory: Factory,
+    executor: Executor,
+    matcher: Matcher,
     _phantom: PhantomData<(Request, Exchange)>,
 }
 
 // Empty state
 impl<Request, Exchange> RouterBuilder<Request, Exchange, Empty>
 where
-    Request: Send + Sync + 'static,
-    Exchange: Send + Sync + 'static,
+    Request: Send + Sync,
+    Exchange: Send + Sync,
 {
     /// Creates a new RouterBuilder in the empty state.
     ///
@@ -227,7 +231,7 @@ where
     /// during request processing.
     pub fn factory<F>(self, factory: F) -> RouterBuilder<Request, Exchange, WithFactory<F>>
     where
-        F: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
+        F: ExchangeFactory<Request, Exchange> + Send + Sync,
     {
         RouterBuilder {
             _phantom: PhantomData,
@@ -239,9 +243,9 @@ where
 // With factory state
 impl<Request, Exchange, Factory> RouterBuilder<Request, Exchange, WithFactory<Factory>>
 where
-    Request: Send + Sync + 'static,
-    Exchange: Send + Sync + 'static,
-    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
+    Request: Send + Sync,
+    Exchange: Send + Sync,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync,
 {
     /// Adds a handler executor to the builder and transitions to WithExecutor state.
     ///
@@ -257,7 +261,7 @@ where
     /// running handler chains on exchanges.
     pub fn executor<Executor>(self, executor: Executor) -> RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
     where
-        Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
+        Executor: HandlerExecutor<Exchange> + Send + Sync,
     {
         RouterBuilder {
             _phantom: PhantomData,
@@ -272,10 +276,10 @@ where
 // With executor state
 impl<Request, Exchange, Factory, Executor> RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
 where
-    Request: Send + Sync + 'static,
-    Exchange: Send + Sync + 'static,
-    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
-    Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
+    Request: Send + Sync,
+    Exchange: Send + Sync,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync,
+    Executor: HandlerExecutor<Exchange> + Send + Sync,
 {
     /// Adds a path matcher to the builder and transitions to Complete state.
     ///
@@ -291,7 +295,7 @@ where
     /// to find appropriate handler chains for incoming requests.
     pub fn matcher<Matcher>(self, matcher: Matcher) -> RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
     where
-        Matcher: PathMatcher<Exchange> + Send + Sync + 'static,
+        Matcher: PathMatcher<Exchange> + Send + Sync,
     {
         RouterBuilder {
             _phantom: PhantomData,
@@ -307,11 +311,11 @@ where
 // Complete state - ready to build
 impl<Request, Exchange, Factory, Executor, Matcher> RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
 where
-    Request: Send + Sync + 'static,
-    Exchange: Send + Sync + 'static,
-    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
-    Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
-    Matcher: PathMatcher<Exchange> + Send + Sync + 'static,
+    Request: Send + Sync,
+    Exchange: Send + Sync,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync,
+    Executor: HandlerExecutor<Exchange> + Send + Sync,
+    Matcher: PathMatcher<Exchange> + Send + Sync,
 {
     /// Builds and returns a configured RequestRouter instance.
     ///
@@ -324,9 +328,9 @@ where
     /// is ready to process requests through the configured pipeline.
     pub fn build(self) -> RequestRouter<Request, Exchange, Factory, Executor, Matcher> {
         RequestRouter {
-            factory: Arc::new(self.state.factory),
-            executor: Arc::new(self.state.executor),
-            matcher: Arc::new(self.state.matcher),
+            factory: self.state.factory,
+            executor: self.state.executor,
+            matcher: self.state.matcher,
             _phantom: PhantomData,
         }
     }
@@ -334,15 +338,15 @@ where
 
 // Router trait implementation
 #[async_trait]
-impl<Request, Exchange, Factory, Executor, Metadata> Router<Request, Executor::Output>
-for RequestRouter<Request, Exchange, Factory, Executor, Metadata>
+impl<Request, Exchange, Factory, Executor, Matcher> Router<Request, Executor::Output>
+for RequestRouter<Request, Exchange, Factory, Executor, Matcher>
 where
-    Request: Send + Sync + 'static,
-    Exchange: Send + Sync + 'static,
-    Factory: ExchangeFactory<Request, Exchange> + Send + Sync + 'static,
-    Executor: HandlerExecutor<Exchange> + Send + Sync + 'static,
-    Executor::Output: Send + Sync + 'static,
-    Metadata: PathMatcher<Exchange> + Send + Sync + 'static,
+    Request: Send + Sync,
+    Exchange: Send + Sync,
+    Factory: ExchangeFactory<Request, Exchange> + Send + Sync,
+    Executor: HandlerExecutor<Exchange> + Send + Sync,
+    Executor::Output: Send + Sync,
+    Matcher: PathMatcher<Exchange> + Send + Sync,
 {
     /// Routes a request through the configured pipeline and returns the result.
     ///
@@ -355,7 +359,7 @@ where
     /// - `Err(RouterError)` if any step in the routing process fails
     ///
     /// # Errors
-    /// Returns `RouterError::InvalidExchange` if:
+    /// `RouterError::InvalidExchange` if:
     /// - Route information extraction from the request fails
     /// - Exchange creation from the request fails
     ///
@@ -365,10 +369,10 @@ where
     ///
     /// # Behavior
     /// Implements the complete request routing pipeline:
-    /// 1. Extracts routing information from the request using the factory
-    /// 2. Looks up the appropriate handler chain using the matcher
-    /// 3. Creates an exchange from the request using the factory
-    /// 4. Executes the handler chain on the exchange using the executor
+    /// 1. Extracts routing information from the request using factory
+    /// 2. It looks up the appropriate handler chain using matcher
+    /// 3. Creates an exchange from the request using factory
+    /// 4. Executes the handler chain on the exchange using executor
     /// 5. Returns the final result from the executor
     async fn route(&self, request: Request) -> Result<Executor::Output, crate::router::RouterError> {
         let route_key = self

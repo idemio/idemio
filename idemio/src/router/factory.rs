@@ -56,7 +56,7 @@ pub mod hyper {
     use hyper::http::request::Parts;
     use std::error::Error;
     use std::marker::PhantomData;
-    use crate::router::path::http::PathPrefixMethodKey;
+    use crate::router::path::http::HttpPathMethodKey;
 
     /// Factory implementation for creating exchanges from Hyper HTTP requests.
     ///
