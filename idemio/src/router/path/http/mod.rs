@@ -318,7 +318,7 @@ where
 
         // Check final node for exact match (higher priority than wildcards)
         if current_node.methods.contains_key(request_method)
-            && current_node.segment_depth > max_depth
+            && current_node.segment_depth >= max_depth
         {
             best_match = Some(current_node);
         }
