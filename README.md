@@ -1,5 +1,6 @@
 # Idemio
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](https://www.apache.org/licenses/LICENSE-2.0)
+[![codecov](https://codecov.io/gh/idemio/idemio/branch/main/graph/badge.svg)](https://codecov.io/gh/idemio/idemio)
 
 A high-performance, asynchronous request/response processing framework for Rust, designed for building robust HTTP servers and microservices with configurable handler chains and routing.
 
