@@ -8,6 +8,8 @@
       <sourceFolder url="file://$MODULE_DIR$/idemio/benches" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/idemio/examples" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/idemio/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/hyper_example/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/lambda_example/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/idemio/target" />
     </content>

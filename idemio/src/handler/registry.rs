@@ -5,52 +5,25 @@ use std::sync::Arc;
 use thiserror::Error;
 
 /// Errors that can occur during handler registry operations.
-///
-/// This enum defines the various error conditions that can arise when managing
-/// handlers in the registry system, including handler lookup and registration failures.
 #[derive(Error, Debug)]
 pub enum HandlerRegistryError {
     /// Indicates that a handler with the specified ID could not be found in the registry.
-    ///
-    /// This error occurs when attempting to retrieve a handler that has not been
-    /// registered or has been removed from the registry. The error includes the
-    /// specific handler ID not found to aid in debugging.
     #[error("Handler with id '{handler_id}' not found.")]
     MissingHandler { handler_id: HandlerId },
 
     /// Indicates that registration failed due to a handler ID conflict.
-    ///
-    /// This error occurs when attempting to register a handler with an ID that
-    /// is already in use by another handler. Handler IDs must be unique within
-    /// a registry instance to ensure proper handler resolution.
     #[error("Handler with id '{handler_id}' already exists.")]
     ConflictingHandlerId { handler_id: HandlerId },
 }
 
 impl HandlerRegistryError {
     /// Creates a new `MissingHandler` error with the specified handler ID.
-    ///
-    /// # Parameters
-    ///
-    /// * `id` - The handler ID that could not be found
-    ///
-    /// # Returns
-    ///
-    /// A new `HandlerRegistryError::MissingHandler` variant
     #[inline]
     pub(crate) const fn missing_handler(id: HandlerId) -> Self {
         Self::MissingHandler { handler_id: id }
     }
 
     /// Creates a new `ConflictingHandlerId` error with the specified handler ID.
-    ///
-    /// # Parameters
-    ///
-    /// * `id` - The conflicting handler ID that caused the registration failure
-    ///
-    /// # Returns
-    ///
-    /// A new `HandlerRegistryError::ConflictingHandlerId` variant
     #[inline]
     pub(crate) const fn conflicting_handler_id(id: HandlerId) -> Self {
         Self::ConflictingHandlerId { handler_id: id }
@@ -58,58 +31,14 @@ impl HandlerRegistryError {
 }
 
 /// A generic trait for registry implementations that manage typed items with handler IDs.
-///
-/// This trait provides a common interface for registry systems that store and retrieve
-/// items by `HandlerId`. It's designed to be flexible enough to support different
-/// storage backends while maintaining consistent error handling.
-///
-/// # Type Parameters
-///
-/// * `T` - The type of items stored in the registry (must be `Send + Sync` for thread safety)
-///
-/// # Thread Safety
-///
-/// Implementations of this trait should be thread-safe when `T` implements `Send + Sync`.
 pub trait Registry<T>
 where
     T: Send + Sync,
 {
     /// Retrieves an item from the registry by its handler ID.
-    ///
-    /// # Parameters
-    ///
-    /// * `id` - A reference to the handler ID to look up
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(Arc<T>)` containing the requested item if found, or
-    /// `Err(HandlerRegistryError::MissingHandler)` if no item with the
-    /// specified ID exists in the registry.
-    ///
-    /// # Behavior
-    ///
-    /// The returned item is wrapped in an `Arc` to enable safe sharing across
-    /// multiple threads and handlers. The registry retains ownership of the
-    /// original item.
     fn find_with_id(&self, id: &HandlerId) -> Result<Arc<T>, HandlerRegistryError>;
 
     /// Registers a new item in the registry with the specified handler ID.
-    ///
-    /// # Parameters
-    ///
-    /// * `handler_id` - A reference to the unique identifier for the item
-    /// * `handler` - The item to be registered
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if registration succeeds, or
-    /// `Err(HandlerRegistryError::ConflictingHandlerId)` if an item with
-    /// the same ID already exists in the registry.
-    ///
-    /// # Behavior
-    ///
-    /// The item is stored internally and can be retrieved later using the
-    /// provided handler ID. Handler IDs must be unique within the registry.
     fn register_handler(
         &mut self,
         handler_id: &HandlerId,
@@ -118,36 +47,6 @@ where
 }
 
 /// A thread-safe registry for managing handler instances with unique identifiers.
-///
-/// This struct provides a concurrent, high-performance registry implementation for storing
-/// and retrieving handler instances. It uses `DashMap` for thread-safe concurrent access
-/// and FNV hashing for optimal performance with string-based handler IDs.
-///
-/// # Type Parameters
-///
-/// * `In` - The input data type that registered handlers will process
-/// * `Out` - The output data type that registered handlers will produce
-/// * `Meta` - The metadata type associated with handler processing contexts
-///
-/// All type parameters must implement `Send + Sync` for thread safety.
-///
-/// # Thread Safety
-///
-/// This registry is fully thread-safe and can be safely shared across multiple async tasks
-/// and threads. All operations are atomic and lock-free where possible. The internal
-/// `DashMap` provides concurrent read/write access without blocking.
-///
-/// # Performance
-///
-/// The registry uses FNV (Fowler-Noll-Vo) hashing, which is optimized for string-based keys
-/// like handler IDs. This provides fast hash computation and good distribution for typical
-/// handler identifier patterns.
-///
-/// # Memory Management
-///
-/// Handlers are stored as `Arc<dyn Handler<In, Out, Meta>>` enabling efficient sharing
-/// and automatic cleanup when no longer referenced. The registry maintains strong
-/// references to all registered handlers.
 pub struct HandlerRegistry<E>
 where
     E: Send + Sync,
@@ -160,17 +59,6 @@ where
     E: Send + Sync,
 {
     /// Creates a new empty handler registry.
-    ///
-    /// # Returns
-    ///
-    /// A new `HandlerRegistry` instance with no registered handlers, configured
-    /// with FNV hashing for optimal performance.
-    ///
-    /// # Behavior
-    ///
-    /// The registry is initialized with an empty concurrent hash map using FNV
-    /// (Fowler-Noll-Vo) hashing, which provides excellent performance for
-    /// string-based keys like handler identifiers.
     pub fn new() -> Self {
         Self {
             handlers: DashMap::with_hasher(fnv::FnvBuildHasher::default()),
@@ -178,28 +66,6 @@ where
     }
 
     /// Retrieves a handler from the registry by its identifier.
-    ///
-    /// # Parameters
-    ///
-    /// * `id` - A reference to the handler ID to look up
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(Arc<dyn Handler<In, Out, Meta>>)` containing the requested handler
-    /// if found, or `Err(HandlerRegistryError::MissingHandler)` if no handler with
-    /// the specified ID exists in the registry.
-    ///
-    /// # Behavior
-    ///
-    /// This method performs a thread-safe lookup in the concurrent hash map.
-    /// The returned handler is wrapped in an `Arc` enabling safe sharing across
-    /// multiple execution contexts. The registry retains ownership of the handler.
-    ///
-    /// # Thread Safety
-    ///
-    /// This method is fully thread-safe and can be called concurrently from multiple
-    /// threads without synchronization. The underlying `DashMap` handles all necessary
-    /// locking internally.
     pub(crate) fn find_with_id(
         &self,
         id: &HandlerId,
@@ -211,69 +77,6 @@ where
     }
 
     /// Registers a new handler in the registry with the specified identifier.
-    ///
-    /// # Parameters
-    ///
-    /// * `handler_id` - The unique identifier for the handler (takes ownership for internal storage)
-    /// * `handler` - The handler implementation to register (must implement `Handler<In, Out, Meta>`)
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if registration succeeds, or `Err(HandlerRegistryError::ConflictingHandlerId)`
-    /// if a handler with the same ID already exists in the registry.
-    ///
-    /// # Errors
-    ///
-    /// This method returns an error if:
-    /// * A handler with the same `handler_id` already exists in the registry
-    ///
-    /// # Behavior
-    ///
-    /// The handler is wrapped in an `Arc` and stored in the concurrent hash map.
-    /// If a handler with the same ID already exists, the registration fails and
-    /// the existing handler remains unchanged. Handler IDs must be unique within
-    /// the registry instance.
-    ///
-    /// # Thread Safety
-    ///
-    /// This method is thread-safe and uses atomic operations to prevent race conditions
-    /// during handler registration. The check-and-insert operation is atomic, ensuring
-    /// that duplicate registrations are properly detected even under concurrent access.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::convert::Infallible;
-    /// use async_trait::async_trait;
-    /// use idemio::exchange::Exchange;
-    /// use idemio::handler::{registry::HandlerRegistry, Handler, HandlerId};
-    /// use idemio::status::{ExchangeState, HandlerStatus};
-    ///
-    ///
-    /// pub struct MyHandler;
-    ///
-    /// #[async_trait]
-    /// impl Handler<Exchange<String, String, ()>> for MyHandler {
-    ///     async fn exec(
-    ///         &self,
-    ///         exchange: &mut Exchange<String, String, ()>
-    ///     ) -> Result<HandlerStatus, Infallible>
-    ///     {
-    ///         Ok(HandlerStatus::new(ExchangeState::OK))
-    ///     }
-    ///
-    ///     fn name(&self) -> &str {
-    ///         "MyHandler"
-    ///     }
-    ///
-    /// }
-    /// let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
-    /// let handler_id = HandlerId::new("my_handler");
-    /// let handler = MyHandler;
-    ///
-    /// let result = registry.register_handler(handler_id, handler);
-    /// assert!(result.is_ok());
-    /// ```
     pub fn register_handler(
         &mut self,
         handler_id: HandlerId,

@@ -1,5 +1,4 @@
-use crate::handler::registry::{HandlerRegistry, HandlerRegistryError};
-use crate::handler::Handler;
+use crate::handler::registry::{HandlerRegistry};
 use crate::router::config::{RouterConfig, Routes};
 use crate::router::path::{LoadedChain, PathMatcher, PathMatcherError};
 use fnv::{FnvBuildHasher, FnvHasher};
@@ -10,29 +9,14 @@ use std::hash::{Hash, Hasher};
 use std::iter::Filter;
 use std::str::{FromStr, Split};
 use std::sync::Arc;
-use thiserror::Error;
+use crate::router::factory::RouteInfo;
 
 /// Splits a path string into individual segments, filtering out empty segments.
-///
-/// # Parameters
-/// - `path`: Path string to split (e.g., "/api/v1/users", "/health")
-///
-/// # Returns
-/// An iterator over non-empty path segments. Leading and trailing slashes are ignored,
-/// and consecutive slashes are treated as a single separator.
-fn split_path(path: &str) -> Filter<Split<char>, fn(&&str) -> bool> {
+fn split_path(path: &'_ str) -> Filter<Split<char>, fn(&&str) -> bool> {
     path.split('/').filter(|s| !s.is_empty())
 }
 
 /// A key used for fast lookup of static paths (paths without wildcards) in the router.
-///
-/// # Behavior
-/// This is an internal optimization structure that uses FNV hashing for efficient
-/// method and path combination lookups. Static paths can be resolved in O(1) time
-/// using hash table lookups rather than tree traversal.
-///
-/// FNV hashing is chosen for its speed and good distribution characteristics for
-/// short strings like HTTP methods and URL paths.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct StaticPathMethodKey {
     /// Hash of the HTTP method string (e.g., "GET", "POST")
@@ -43,17 +27,6 @@ struct StaticPathMethodKey {
 
 impl StaticPathMethodKey {
     /// Creates a new StaticPathKey from method and path strings.
-    ///
-    /// # Parameters
-    /// - `method`: HTTP method string (e.g., "GET", "POST", "PUT", "DELETE")
-    /// - `path`: URL path string (e.g., "/api/users", "/health", "/api/v1/orders")
-    ///
-    /// # Returns
-    /// A new StaticPathKey with hashed method and path values for fast comparison.
-    ///
-    /// # Behavior
-    /// Performs two FNV hash calculations, which are very fast operations.
-    /// The resulting key can be used for O(1) hash table lookups.
     pub fn new(method: impl AsRef<str>, path: impl AsRef<str>) -> Self {
         let path = path.as_ref();
         let method = method.as_ref();
@@ -71,29 +44,12 @@ impl StaticPathMethodKey {
 }
 
 /// Represents a segment in a URL path, which can be either a static text or a wildcard.
-///
-/// # Behavior
-/// Path segments are the building blocks of the routing tree structure used for
-/// dynamic path matching. Each segment in a URL path (separated by '/') becomes
-/// a PathSegment in the routing tree.
-///
-/// Wildcard behavior:
-/// - `Static` segments must match exactly
-/// - `Any` segments (wildcards) match any single path segment
-/// - Wildcards use longest-prefix matching when multiple patterns could apply
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum HttpPathSegment {
     /// A static path segment containing literal text that must match exactly.
-    ///
-    /// # Behavior
-    /// Static segments require exact string matching during route resolution.
     Static(String),
 
     /// A wildcard segment that matches any single path segment value.
-    ///
-    /// # Behavior
-    /// Represented by "*" in path patterns. Matches exactly one path segment,
-    /// not multiple segments or empty segments.
     Any,
 }
 
@@ -103,9 +59,6 @@ impl Display for HttpPathSegment {
     /// # Returns
     /// - Static segments return their contained string
     /// - Any segments return "*"
-    ///
-    /// # Behavior
-    /// Provides a human-readable representation of the path segment.
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             HttpPathSegment::Static(s) => write!(f, "{}", s),
@@ -121,13 +74,6 @@ impl FromStr for HttpPathSegment {
     ///
     /// # Parameters
     /// - `s`: String slice to parse. "*" creates a wildcard, anything else creates a static segment.
-    ///
-    /// # Returns
-    /// Always succeeds with either `PathSegment::Any` for "*" or `PathSegment::Static` for other values.
-    /// This operation is infallible as any string can be converted to a path segment.
-    ///
-    /// # Behavior
-    /// Converts string representations into strongly typed path segments for routing tree construction.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s == "*" {
             Ok(HttpPathSegment::Any)
@@ -138,15 +84,6 @@ impl FromStr for HttpPathSegment {
 }
 
 /// A node in the path routing tree structure.
-///
-/// # Behavior
-/// Each node represents a path segment and can contain:
-/// - Child nodes for deeper path segments
-/// - Method handlers for HTTP methods at this path depth
-/// - Depth information for longest-prefix matching
-///
-/// The tree structure allows efficient matching of both static and dynamic paths.
-/// Uses FNV hashing for fast child node and method lookups.
 struct HttpPathMethodNode<E>
 where
     E: Send + Sync,
@@ -164,12 +101,6 @@ where
     E: Send + Sync,
 {
     /// Creates a new empty PathNode with default FNV-hashed collections.
-    ///
-    /// # Returns
-    /// A new `PathNode` with empty children and methods collections, and depth set to 0.
-    ///
-    /// # Behavior
-    /// Initializes the node with FNV hashers for optimal performance with string keys.
     fn default() -> Self {
         Self {
             children: HashMap::with_hasher(FnvBuildHasher::default()),
@@ -280,9 +211,15 @@ where
         }
     }
 
-    fn lookup(&self, key: (&str, &str)) -> Option<Arc<LoadedChain<E>>> {
-        let request_path = key.0;
-        let request_method = key.1;
+    fn lookup(&self, key: RouteInfo<'_>) -> Option<Arc<LoadedChain<E>>> {
+        let request_path = match key.path {
+            Some(path) => path,
+            None => return None,
+        };
+        let request_method = match key.method {
+            Some(method) => method,
+            None => return None,
+        };
         // Fast path: try the exact static match first
         if let Some(handlers) = self
             .static_paths
@@ -355,6 +292,7 @@ mod test {
     use crate::status::{ExchangeState, HandlerStatus};
     use async_trait::async_trait;
     use std::convert::Infallible;
+    use crate::router::factory::RouteInfo;
 
     /// A simple test handler that does nothing but return an OK status.
     ///
@@ -436,23 +374,23 @@ mod test {
         let table = HttpPathMethodMatcher::new(&config, &registry).unwrap();
 
         // Test wildcard matching - should match the "/api/v1/*" pattern
-        let result = table.lookup(("/api/v1/users", "GET"));
+        let result = table.lookup(RouteInfo::new("/api/v1/users", "GET"));
         assert!(result.is_some());
         let handlers = result.unwrap();
         assert_eq!(handlers.request_handlers.len(), 6); // test_chain has 6 handlers
 
         // Test another wildcard match with a different path segment
-        let result = table.lookup(("/api/v1/someOtherEndpoint", "GET"));
+        let result = table.lookup(RouteInfo::new("/api/v1/someOtherEndpoint", "GET"));
         assert!(result.is_some());
         let handlers = result.unwrap();
         assert_eq!(handlers.request_handlers.len(), 6);
 
         // Test non-matching path - should return None
-        let result = table.lookup(("/invalid", "GET"));
+        let result = table.lookup(RouteInfo::new("/invalid", "GET"));
         assert!(result.is_none());
 
         // Test path that goes beyond wildcard - should still match "/api/v1/*"
-        let result = table.lookup(("/api/v1/users/somethingElse", "GET"));
+        let result = table.lookup(RouteInfo::new("/api/v1/users/somethingElse", "GET"));
         assert!(result.is_some());
         let handlers = result.unwrap();
         assert_eq!(handlers.request_handlers.len(), 6);
