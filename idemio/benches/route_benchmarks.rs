@@ -11,6 +11,7 @@ use idemio::router::path::http::HttpPathMethodMatcher;
 use idemio::status::{ExchangeState, HandlerStatus};
 use std::convert::Infallible;
 use std::hint::black_box;
+use idemio::router::factory::RouteInfo;
 // This is a simple benchmark to aid development of the router
 
 #[derive(Debug)]
@@ -92,7 +93,7 @@ fn bench_dynamic_route_table(c: &mut Criterion) {
     let table = create_populated_dynamic_route_table_v2(1000);
     c.bench_function("dynamic_route_table_v2", |b| {
         b.iter(|| {
-            black_box(table.lookup(("GET", "/test/12345")));
+            black_box(table.lookup(RouteInfo::new("GET", "/test/12345")));
         });
     });
 }

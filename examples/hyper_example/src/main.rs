@@ -10,9 +10,9 @@ use hyper::http::request::Parts;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
-use serde::{Deserialize, Serialize};
-
 use hyper_util::rt::TokioIo;
+use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
 use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
 use idemio::exchange::Exchange;
 use idemio::handler::registry::HandlerRegistry;
@@ -26,7 +26,6 @@ use idemio::router::factory::hyper::HyperExchangeFactory;
 use idemio::router::path::http::HttpPathMethodMatcher;
 use idemio::router::{Router, RouterBuilder, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
-use tokio::net::TcpListener;
 use idemio::router::path::PathMatcher;
 
 // Simplified type alias for the complete router
@@ -331,9 +330,6 @@ async fn handle_request(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Initialize simple logging
-    env_logger::init();
-
     let router = Arc::new(create_router());
     // This address is localhost
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));

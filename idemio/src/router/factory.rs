@@ -1,6 +1,17 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+pub struct RouteInfo<'a> {
+    pub path: Option<&'a str>,
+    pub method: Option<&'a str>,
+}
+
+impl<'a> RouteInfo<'a> {
+    pub fn new(path: &'a str, method: &'a str) -> Self {
+        Self { path: Some(path), method: Some(method) }
+    }
+}
+
 #[async_trait]
 pub trait ExchangeFactory<Request, E>
 where
@@ -12,7 +23,7 @@ where
     async fn extract_route_info<'a>(
         &self,
         request: &'a Request,
-    ) -> Result<(&'a str, &'a str), ExchangeFactoryError>;
+    ) -> Result<RouteInfo<'a>, ExchangeFactoryError>;
 
     async fn create_exchange<'req>(
         &self,
@@ -46,7 +57,7 @@ impl ExchangeFactoryError {
 #[cfg(feature = "hyper")]
 pub mod hyper {
     use crate::exchange::Exchange;
-    use crate::router::factory::{ExchangeFactory, ExchangeFactoryError};
+    use crate::router::factory::{ExchangeFactory, ExchangeFactoryError, RouteInfo};
     use async_trait::async_trait;
     use futures_util::StreamExt;
     use http_body_util::BodyExt;
@@ -59,31 +70,6 @@ pub mod hyper {
     use crate::router::path::http::HttpPathMethodKey;
 
     /// Factory implementation for creating exchanges from Hyper HTTP requests.
-    ///
-    /// This struct provides a concrete implementation of `ExchangeFactory` for HTTP requests
-    /// using the Hyper library. It handles HTTP-specific request parsing and creates exchanges
-    /// suitable for HTTP request processing with streaming body support.
-    ///
-    /// # Type Specialization
-    ///
-    /// This factory is specialized for:
-    /// * `Request<Incoming>` - Hyper HTTP requests with streaming bodies
-    /// * `Bytes` - Input/output data as byte arrays from Hyper's body system
-    /// * `BoxBody<Bytes, std::io::Error>` - Output type for HTTP responses with proper error handling
-    /// * `Parts` - HTTP request metadata (headers, method, URI, version, extensions)
-    ///
-    /// # Thread Safety
-    ///
-    /// This factory is thread-safe and can be shared across multiple async tasks.
-    /// It contains no mutable state and all operations are stateless.
-    ///
-    /// # Behavior
-    ///
-    /// The factory handles HTTP request body streaming efficiently by:
-    /// - Converting Hyper's `Incoming` body stream to the exchange system's stream format
-    /// - Preserving all HTTP metadata in the exchange
-    /// - Using `HyperBytesCollector` for optimal byte stream collection
-    /// - Providing proper error handling for I/O and parsing errors
     pub struct HyperExchangeFactory;
 
     #[async_trait]
@@ -91,34 +77,14 @@ pub mod hyper {
     for HyperExchangeFactory
     {
         /// Extracts HTTP method and path from a Hyper request.
-        ///
-        /// # Parameters
-        ///
-        /// * `request` - A reference to the Hyper HTTP request
-        ///
-        /// # Returns
-        ///
-        /// Returns a tuple containing:
-        /// * `&str` - The request path from the URI (e.g., "/api/users", "/health")
-        /// * `&str` - The HTTP method as a string (e.g., "GET", "POST", "PUT", "DELETE")
-        ///
-        /// # Errors
-        ///
-        /// This method is infallible for well-formed Hyper requests as the URI and method
-        /// are always available in a valid HTTP request.
-        ///
-        /// # Behavior
-        ///
-        /// This method extracts routing information directly from the HTTP request
-        /// without consuming it. It uses Hyper's built-in method and URI parsing,
-        /// which are guaranteed to be present in valid HTTP requests.
         async fn extract_route_info<'a>(
             &self,
             request: &'a Request<Incoming>,
-        ) -> Result<(&'a str, &'a str), ExchangeFactoryError> {
-            let method = request.method().as_str();
-            let path = request.uri().path();
-            Ok((path, method))
+        ) -> Result<RouteInfo<'a>, ExchangeFactoryError> {
+            Ok(RouteInfo {
+                path: Some(request.uri().path()),
+                method: Some(request.method().as_str()),
+            })
         }
 
         async fn create_exchange<'req>(

@@ -5,6 +5,7 @@ use crate::handler::{Handler, HandlerId};
 use crate::router::config::{PathChain, RouterConfig};
 use std::sync::Arc;
 use thiserror::Error;
+use crate::router::factory::RouteInfo;
 
 /// Errors that can occur during PathMatcher construction and operation.
 #[derive(Error, Debug)]
@@ -85,12 +86,6 @@ where
     ///   This is the core business logic handler that must always be present.
     /// - `response_handlers`: Vector of handlers to execute after the termination handler.
     ///   These typically handle response transformation, logging, metrics collection, etc.
-    ///
-    /// # Returns
-    /// A new `LoadedChain` instance containing the provided handlers in the specified execution order.
-    ///
-    /// # Behavior
-    /// Stores all handlers in their respective categories for ordered execution during request processing.
     pub(crate) fn new(
         request_handlers: Vec<Arc<dyn Handler<E>>>,
         termination_handler: Arc<dyn Handler<E>>,
@@ -105,10 +100,6 @@ where
 
     /// Returns the total number of handlers in this chain.
     ///
-    /// # Returns
-    /// The total count of all handlers (request + termination + response handlers).
-    /// This method always returns at least 1, as every chain must have a termination handler.
-    ///
     /// # Behavior
     /// Calculates the size using the formula: `request_handlers.len() + 1 + response_handlers.len()`.
     pub fn size(&self) -> usize {
@@ -116,77 +107,27 @@ where
     }
 
     /// Returns a reference to the request handlers vector.
-    ///
-    /// # Returns
-    /// An immutable reference to the vector containing all request handlers.
-    /// These handlers are executed in order before the termination handler.
-    ///
-    /// # Behavior
-    /// Provides read-only access to the request handlers for inspection or execution.
     pub fn request_handlers(&self) -> &Vec<Arc<dyn Handler<E>>> {
         &self.request_handlers
     }
 
     /// Returns a reference to the termination handler.
-    ///
-    /// # Returns
-    /// An immutable reference to the termination handler, which is the main business logic
-    /// handler that processes the request and generates the primary output.
-    ///
-    /// # Behavior
-    /// Provides read-only access to the termination handler for inspection or execution.
     pub fn termination_handler(&self) -> &Arc<dyn Handler<E>> {
         &self.termination_handler
     }
 
     /// Returns a reference to the response handlers vector.
-    ///
-    /// # Returns
-    /// An immutable reference to the vector containing all response handlers.
-    /// These handlers are executed in order after the termination handler completes successfully.
-    ///
-    /// # Behavior
-    /// Provides read-only access to the response handlers for inspection or execution.
     pub fn response_handlers(&self) -> &Vec<Arc<dyn Handler<E>>> {
         &self.response_handlers
     }
 }
 
 /// A trait for matching URL paths to handler chains in the routing system.
-///
-/// # Type Parameters
-/// - `Exchange`: The exchange type that will be processed by the matched handlers
-///
-/// # Behavior
-/// Implementations provide path-to-handler mapping functionality with support for:
-/// - Static path matching for exact routes
-/// - Dynamic path matching with wildcards
-/// - HTTP method-based routing
-/// - Handler chain resolution and loading
-/// - Configuration parsing from routing definitions
 pub trait PathMatcher<Exchange>
 where
     Exchange: Send + Sync,
 {
     /// Parses router configuration and populates the matcher with routes.
-    ///
-    /// # Parameters
-    /// - `route_config`: The router configuration containing path definitions
-    /// - `handler_registry`: Registry containing available handlers
-    ///
-    /// # Returns
-    /// `Result<(), PathMatcherError>` where:
-    /// - `Ok(())` indicates successful configuration parsing
-    /// - `Err(PathMatcherError)` if configuration is invalid or handlers are missing
-    ///
-    /// # Errors
-    /// `PathMatcherError` variants for:
-    /// - `InvalidConfiguration` if the configuration format is malformed
-    /// - `HandlerRegistryError` if referenced handlers are not found in the registry
-    ///
-    /// # Behavior
-    /// Processes the configuration to build internal routing structures,
-    /// validates all referenced handlers exist, and prepares the matcher for lookups.
     fn parse_config(
         &mut self,
         route_config: &RouterConfig,
@@ -194,39 +135,9 @@ where
     ) -> Result<(), PathMatcherError>;
 
     /// Looks up a handler chain for the given path and method combination.
-    ///
-    /// # Parameters
-    /// - `key`: A tuple containing `(path, method)` where path is the URL path
-    ///   and method is the HTTP method string
-    ///
-    /// # Returns
-    /// `Option<Arc<LoadedChain<E>>>` where:
-    /// - `Some(Arc<LoadedChain<E>>)` contains the matched handler chain
-    /// - `None` if no matching route is found
-    ///
-    /// # Behavior
-    /// Searches the internal routing structures to find the best matching handler chain.
-    /// Supports both exact static matches and wildcard pattern matching with
-    /// longest-prefix matching for ambiguous cases.
-    fn lookup(&self, key: (&str, &str)) -> Option<Arc<LoadedChain<Exchange>>>;
+    fn lookup(&self, key: RouteInfo<'_>) -> Option<Arc<LoadedChain<Exchange>>>;
 
     /// Creates a new PathMatcher instance from configuration and handler registry.
-    ///
-    /// # Parameters
-    /// - `config`: The router configuration to parse
-    /// - `handler_registry`: Registry containing available handlers
-    ///
-    /// # Returns
-    /// `Result<Self, PathMatcherError>` where:
-    /// - `Ok(Self)` contains the configured PathMatcher instance
-    /// - `Err(PathMatcherError)` if creation fails
-    ///
-    /// # Errors
-    /// `PathMatcherError` if configuration parsing or handler resolution fails.
-    ///
-    /// # Behavior
-    /// Constructs a new matcher instance and immediately parses the provided configuration.
-    /// This is a convenience method that combines instantiation and configuration.
     fn new(
         config: &RouterConfig,
         handler_registry: &HandlerRegistry<Exchange>,
@@ -235,22 +146,6 @@ where
         Self: Sized;
 
     /// Finds a single handler in the registry by name.
-    ///
-    /// # Parameters
-    /// - `handler`: String name of the handler to find
-    /// - `handler_registry`: Registry to search in
-    ///
-    /// # Returns
-    /// `Result<Arc<dyn Handler<E>>, PathMatcherError>` where:
-    /// - `Ok(Arc<dyn Handler<E>>)` contains the found handler
-    /// - `Err(PathMatcherError)` if the handler is not found
-    ///
-    /// # Errors
-    /// Returns `PathMatcherError::HandlerRegistryError` if the handler is not registered.
-    ///
-    /// # Behavior
-    /// Creates a HandlerId from the handler name and performs registry lookup.
-    /// This is a utility method for handler resolution during configuration parsing.
     fn find_in_registry(
         handler: &str,
         handler_registry: &HandlerRegistry<Exchange>,
@@ -263,23 +158,6 @@ where
     }
 
     /// Finds multiple handlers in the registry by their names.
-    ///
-    /// # Parameters
-    /// - `handlers`: Slice of handler name strings to find
-    /// - `handler_registry`: Registry to search in
-    ///
-    /// # Returns
-    /// `Result<Vec<Arc<dyn Handler<E>>>, PathMatcherError>` where:
-    /// - `Ok(Vec<Arc<dyn Handler<E>>>)` contains all found handlers in order
-    /// - `Err(PathMatcherError)` if any handler is not found
-    ///
-    /// # Errors
-    /// `PathMatcherError::HandlerRegistryError` if any handler is not registered.
-    /// The operation fails fast on the first missing handler.
-    ///
-    /// # Behavior
-    /// Sequentially looks up each handler name and collects them into a vector.
-    /// Used for loading handler chains that contain multiple handlers.
     fn find_all_in_registry(
         handlers: &[String],
         handler_registry: &HandlerRegistry<Exchange>,
@@ -293,26 +171,6 @@ where
     }
 
     /// Loads handlers from the registry and creates a complete handler chain.
-    ///
-    /// # Parameters
-    /// - `handler_registry`: Registry containing available handlers
-    /// - `path_chain`: Configuration defining the handler chain structure
-    ///
-    /// # Returns
-    /// `Result<LoadedChain<E>, PathMatcherError>` where:
-    /// - `Ok(LoadedChain<E>)` contains the complete loaded handler chain
-    /// - `Err(PathMatcherError)` if handler loading fails
-    ///
-    /// # Errors
-    /// - `PathMatcherError::InvalidMethod` if no termination handler is specified.
-    /// - `PathMatcherError::HandlerRegistryError` if any referenced handler is missing.
-    ///
-    /// # Behavior
-    /// Processes a PathChain configuration to:
-    /// 1. Load optional request handlers from registry
-    /// 2. Load the required termination handler
-    /// 3. Load optional response handlers from registry
-    /// 4. Construct and return a complete LoadedChain
     fn load_handlers(
         handler_registry: &HandlerRegistry<Exchange>,
         path_chain: &PathChain,
