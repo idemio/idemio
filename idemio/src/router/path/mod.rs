@@ -27,10 +27,6 @@ pub enum PathMatcherError {
 }
 
 impl PathMatcherError {
-    //    #[inline]
-    //    pub(crate) fn invalid_path(path: impl Into<String>) -> Self {
-    //        Self::InvalidPath { path: path.into() }
-    //    }
 
     #[inline]
     pub(crate) fn invalid_configuration(message: impl Into<String>) -> Self {
@@ -151,10 +147,8 @@ where
         handler_registry: &HandlerRegistry<Exchange>,
     ) -> Result<Arc<dyn Handler<Exchange>>, PathMatcherError> {
         let handler_id = HandlerId::new(handler);
-        match handler_registry.find_with_id(&handler_id) {
-            Ok(handler) => Ok(handler),
-            Err(e) => Err(PathMatcherError::registry_error(e)),
-        }
+        handler_registry.find_with_id(&handler_id)
+            .map_err(|e| PathMatcherError::registry_error(e))
     }
 
     /// Finds multiple handlers in the registry by their names.

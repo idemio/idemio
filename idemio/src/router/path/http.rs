@@ -1,5 +1,6 @@
-use crate::handler::registry::{HandlerRegistry};
+use crate::handler::registry::HandlerRegistry;
 use crate::router::config::{RouterConfig, Routes};
+use crate::router::factory::RouteInfo;
 use crate::router::path::{LoadedChain, PathMatcher, PathMatcherError};
 use fnv::{FnvBuildHasher, FnvHasher};
 use std::collections::HashMap;
@@ -9,10 +10,9 @@ use std::hash::{Hash, Hasher};
 use std::iter::Filter;
 use std::str::{FromStr, Split};
 use std::sync::Arc;
-use crate::router::factory::RouteInfo;
 
 /// Splits a path string into individual segments, filtering out empty segments.
-fn split_path(path: &'_ str) -> Filter<Split<char>, fn(&&str) -> bool> {
+fn split_path(path: &'_ str) -> Filter<Split<'_, char>, fn(&&str) -> bool> {
     path.split('/').filter(|s| !s.is_empty())
 }
 
@@ -28,18 +28,19 @@ struct StaticPathMethodKey {
 impl StaticPathMethodKey {
     /// Creates a new StaticPathKey from method and path strings.
     pub fn new(method: impl AsRef<str>, path: impl AsRef<str>) -> Self {
-        let path = path.as_ref();
-        let method = method.as_ref();
-        let mut path_hasher = FnvHasher::default();
-        path.hash(&mut path_hasher);
-        let path_hash = path_hasher.finish();
-        let mut method_hasher = FnvHasher::default();
-        method.hash(&mut method_hasher);
-        let method_hash = method_hasher.finish();
+        let path_hash = Self::hash_part(path);
+        let method_hash = Self::hash_part(method);
         Self {
             method_hash,
             path_hash,
         }
+    }
+
+    fn hash_part(in_string: impl AsRef<str>) -> u64 {
+        let str = in_string.as_ref();
+        let mut hasher = FnvHasher::default();
+        str.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -91,7 +92,7 @@ where
     /// Child nodes indexed by path segment (static text or wildcard)
     children: HashMap<HttpPathSegment, HttpPathMethodNode<E>, FnvBuildHasher>,
     /// Depth of this node in the routing tree (0 = root)
-    segment_depth: u64,
+    //segment_depth: u64,
     /// HTTP method handlers available at this path depth
     methods: HashMap<String, Arc<LoadedChain<E>>, FnvBuildHasher>,
 }
@@ -105,7 +106,7 @@ where
         Self {
             children: HashMap::with_hasher(FnvBuildHasher::default()),
             methods: HashMap::with_hasher(FnvBuildHasher::default()),
-            segment_depth: 0,
+            //segment_depth: 0,
         }
     }
 }
@@ -137,7 +138,7 @@ where
 {
     /// Fast hash-based lookup for static paths (no wildcards)
     static_paths: HashMap<StaticPathMethodKey, Arc<LoadedChain<E>>, FnvBuildHasher>,
-    /// Tree structure for dynamic path matching with wildcards
+    /// Tree structure for dynamic-path matching with wildcards
     nodes: HttpPathMethodNode<E>,
 }
 
@@ -156,8 +157,8 @@ where
                     "Starting router configuration parsing with '{}' paths",
                     paths.len()
                 );
-                for (path, methods) in paths.iter() {
-                    log::debug!("Path: '{path}'");
+                for (index, (path, methods)) in paths.iter().enumerate() {
+                    log::debug!("Path {index}: '{path}'");
                     if !path.contains('*') {
                         for (method, path_chain) in methods {
                             log::trace!("Adding static route: {path}@{method}");
@@ -170,29 +171,18 @@ where
                     }
                     let path_segments = split_path(path);
                     let mut current_node = &mut self.nodes;
-                    let mut depth = 0;
                     for segment in path_segments {
                         let path_segment = HttpPathSegment::from_str(segment).unwrap();
                         let is_wild_card = path_segment == HttpPathSegment::Any;
-
-                        log::trace!("Segment '{segment}' at depth {depth} (wild: {is_wild_card})",);
                         current_node = current_node
                             .children
                             .entry(path_segment)
                             .or_insert_with(HttpPathMethodNode::default);
 
-                        current_node.segment_depth = depth;
-
                         if is_wild_card {
-                            log::trace!("Wildcard at depth {depth}, stopping path traversal");
                             break;
                         }
-
-                        depth += 1;
                     }
-
-                    log::debug!("Built tree node at depth {depth} for path '{path}'");
-
                     for (method, handlers) in methods {
                         let chain = Self::load_handlers(&handler_registry, handlers)?;
                         let count = chain.size();
@@ -205,63 +195,52 @@ where
                 }
                 Ok(())
             }
-            _ => Err(PathMatcherError::invalid_configuration(
-                "Route config type should be HttpRequestPaths",
-            )),
+            invalid_route_config => Err(PathMatcherError::invalid_configuration(format!(
+                "Route config type should be HttpRequestPaths when using HttpPathMethodMatcher. '{}' is currently configured.",
+                invalid_route_config
+            ))),
         }
     }
 
     fn lookup(&self, key: RouteInfo<'_>) -> Option<Arc<LoadedChain<E>>> {
-        let request_path = match key.path {
-            Some(path) => path,
-            None => return None,
+        let (path, method) = match (key.path, key.method) {
+            (Some(path), Some(method)) => (path, method),
+            _ => return None,
         };
-        let request_method = match key.method {
-            Some(method) => method,
-            None => return None,
-        };
-        // Fast path: try the exact static match first
+        // Try the exact static match first
         if let Some(handlers) = self
             .static_paths
-            .get(&StaticPathMethodKey::new(&request_method, &request_path))
+            .get(&StaticPathMethodKey::new(&method, &path))
         {
             return Some(handlers.clone());
         }
 
         // Dynamic path matching with wildcards
-        let req_path_segments = split_path(&request_path);
-        let mut best_match: Option<&HttpPathMethodNode<E>> = None;
-        let mut max_depth = 0;
-        let mut current_node = &self.nodes;
+        let segments = split_path(&path);
+        let mut best: Option<&HttpPathMethodNode<E>> = None;
+        let mut current = &self.nodes;
 
-        for segment_str in req_path_segments {
-            // Check for wildcard match at current depth
-            if let Some(wildcard_node) = current_node.children.get(&HttpPathSegment::Any) {
-                if wildcard_node.methods.contains_key(request_method) {
-                    if wildcard_node.segment_depth > max_depth {
-                        max_depth = wildcard_node.segment_depth;
-                        best_match = Some(wildcard_node);
-                    }
+        for segment_str in segments {
+            if let Some(wildcard_node) = current.children.get(&HttpPathSegment::Any) {
+                if wildcard_node.methods.contains_key(method) {
+                    best = Some(wildcard_node);
                 }
             }
 
-            // Try the exact segment match and continue traversal
             let static_segment = HttpPathSegment::Static(segment_str.to_string());
-            current_node = match current_node.children.get(&static_segment) {
+            current = match current.children.get(&static_segment) {
                 Some(child) => child,
                 None => break, // No exact match, stop traversal
             };
         }
 
-        // Check final node for exact match (higher priority than wildcards)
-        if current_node.methods.contains_key(request_method)
-            && current_node.segment_depth >= max_depth
-        {
-            best_match = Some(current_node);
+        // Check the final node for an exact match
+        if current.methods.contains_key(method) {
+            best = Some(current);
         }
 
         // Return the best match found
-        best_match.and_then(|node| node.methods.get(request_method).cloned())
+        best.and_then(|node| node.methods.get(method).cloned())
     }
 
     fn new(
@@ -270,7 +249,7 @@ where
     ) -> Result<Self, PathMatcherError> {
         let mut matcher = Self {
             nodes: HttpPathMethodNode::default(),
-            static_paths: HashMap::with_hasher(fnv::FnvBuildHasher::default()),
+            static_paths: HashMap::with_hasher(FnvBuildHasher::default()),
         };
         if let Err(e) = matcher.parse_config(config, handler_registry) {
             return Err(e);
@@ -288,11 +267,11 @@ mod test {
     use crate::router::config::builder::{
         MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
     };
+    use crate::router::factory::RouteInfo;
     use crate::router::path::{http::HttpPathMethodMatcher, PathMatcher};
     use crate::status::{ExchangeState, HandlerStatus};
     use async_trait::async_trait;
     use std::convert::Infallible;
-    use crate::router::factory::RouteInfo;
 
     /// A simple test handler that does nothing but return an OK status.
     ///
@@ -306,11 +285,7 @@ mod test {
             &self,
             _exchange: &mut Exchange<(), (), ()>,
         ) -> Result<HandlerStatus, Infallible> {
-            Ok(HandlerStatus::new(ExchangeState::OK))
-        }
-
-        fn name(&self) -> &str {
-            "DummyHandler"
+            Ok(HandlerStatus::new(ExchangeState::LIVE))
         }
     }
 

@@ -119,11 +119,7 @@ mod tests {
             &self,
             _exchange: &mut Exchange<String, String, ()>,
         ) -> Result<HandlerStatus, Infallible> {
-            Ok(HandlerStatus::new(ExchangeState::OK))
-        }
-
-        fn name(&self) -> &str {
-            &self.name
+            Ok(HandlerStatus::new(ExchangeState::LIVE))
         }
     }
 
@@ -136,11 +132,7 @@ mod tests {
             &self,
             _exchange: &mut Exchange<String, String, ()>,
         ) -> Result<HandlerStatus, Infallible> {
-            Ok(HandlerStatus::new(ExchangeState::EXCHANGE_COMPLETED))
-        }
-
-        fn name(&self) -> &str {
-            "another_test_handler"
+            Ok(HandlerStatus::new(ExchangeState::COMPLETED))
         }
     }
 
@@ -176,7 +168,7 @@ mod tests {
         let result1 = registry.register_handler(handler_id.clone(), handler1);
         assert!(result1.is_ok());
 
-        // Try to register second handler with same ID
+        // Try to register a second handler with the same ID
         let result2 = registry.register_handler(handler_id.clone(), handler2);
         assert!(result2.is_err());
 
@@ -220,59 +212,14 @@ mod tests {
         // Find the middle handler
         let result = registry.find_with_id(&handler2_id);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().name(), "handler_beta");
 
         // Find the last handler
         let result = registry.find_with_id(&handler3_id);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().name(), "another_test_handler");
 
         // Find the first handler
         let result = registry.find_with_id(&handler1_id);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().name(), "handler_alpha");
-    }
-
-    #[test]
-    fn test_handler_registry_thread_safety() {
-        use std::sync::Arc;
-        use std::thread;
-
-        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
-
-        // Pre-register some handlers
-        for i in 0..5 {
-            let handler_id = HandlerId::new(format!("handler_{}", i));
-            let handler = TestHandler::new(format!("handler_{}", i));
-            registry.register_handler(handler_id, handler).unwrap();
-        }
-
-        let registry = Arc::new(registry);
-        let mut handles = vec![];
-
-        // Spawn multiple threads to concurrently access the registry
-        for i in 0..5 {
-            let registry_clone = Arc::clone(&registry);
-            let handle = thread::spawn(move || {
-                let handler_id = HandlerId::new(format!("handler_{}", i));
-                let result = registry_clone.find_with_id(&handler_id);
-                assert!(result.is_ok());
-                result.unwrap().name().to_string()
-            });
-            handles.push(handle);
-        }
-
-        // Collect results
-        let mut results = vec![];
-        for handle in handles {
-            results.push(handle.join().unwrap());
-        }
-
-        // Verify all handlers were found correctly
-        assert_eq!(results.len(), 5);
-        for i in 0..5 {
-            assert!(results.contains(&format!("handler_{}", i)));
-        }
     }
 
     #[test]

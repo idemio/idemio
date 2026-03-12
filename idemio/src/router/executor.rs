@@ -26,12 +26,10 @@ where
     {
         for handler in handlers {
             let status = handler.exec(exchange).await.unwrap();
-            if status.code.is_in_flight() {
-                continue;
-            } else if status.code.is_completed() || status.code.is_error() {
-                return Ok(true);
-            } else {
-                return Err(ExecutorError::unknown_exchange_state(status.code));
+            match status.state {
+                ExchangeState::LIVE => continue,
+                ExchangeState::ERROR => return Ok(true),
+                ExchangeState::COMPLETED => return Ok(false),
             }
         }
         Ok(false)
@@ -50,9 +48,6 @@ where
 #[derive(Error, Debug)]
 pub enum ExecutorError {
 
-    #[error("Exchange is in an unknown state: {state}")]
-    State { state: ExchangeState },
-
     #[error("Failed to extract output from exchange.")]
     Output {
         #[source]
@@ -62,12 +57,9 @@ pub enum ExecutorError {
 
 impl ExecutorError {
 
+    #[inline]
     pub fn output_read_error(err: ExchangeError) -> Self {
         ExecutorError::Output { source: err }
-    }
-
-    pub fn unknown_exchange_state(state: ExchangeState) -> Self {
-        ExecutorError::State { state }
     }
 }
 
@@ -99,10 +91,8 @@ where
 
         let termination_handler = executables.termination_handler();
         let status = termination_handler.exec(exchange).await.unwrap();
-        if status.code.is_completed() || status.code.is_error() {
+        if status.state == ExchangeState::COMPLETED || status.state == ExchangeState::ERROR {
             return Ok(Self::return_output(exchange).await?);
-        } else if !status.code.is_in_flight() {
-            return Err(ExecutorError::unknown_exchange_state(status.code));
         }
 
         let response_handlers = executables.response_handlers();

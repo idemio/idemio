@@ -11,22 +11,60 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
 use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
 use idemio::exchange::Exchange;
 use idemio::handler::registry::HandlerRegistry;
 use idemio::handler::Handler;
 use idemio::handler::HandlerId;
+use idemio::idemio_handler;
 use idemio::router::config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
 use idemio::router::executor::DefaultExecutor;
-use idemio::router::factory::hyper::HyperExchangeFactory;
+use idemio::router::factory::{ExchangeFactory, ExchangeFactoryError, RouteInfo};
 use idemio::router::path::http::HttpPathMethodMatcher;
+use idemio::router::path::PathMatcher;
 use idemio::router::{Router, RouterBuilder, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
-use idemio::router::path::PathMatcher;
+use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
+pub struct HyperExchangeFactory;
+
+#[async_trait]
+impl
+    ExchangeFactory<
+        Request<Incoming>,
+        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
+    > for HyperExchangeFactory
+{
+    /// Extracts HTTP method and path from a Hyper request.
+    async fn extract_route_info<'a>(
+        &self,
+        request: &'a Request<Incoming>,
+    ) -> Result<RouteInfo<'a>, ExchangeFactoryError> {
+        Ok(RouteInfo {
+            path: Some(request.uri().path()),
+            method: Some(request.method().as_str()),
+        })
+    }
+
+    async fn create_exchange<'req>(
+        &self,
+        request: Request<Incoming>,
+    ) -> Result<
+        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
+        ExchangeFactoryError,
+    > {
+        let mut exchange = Exchange::new();
+        let (parts, body) = request.into_parts();
+        let boxed_body = body
+            .map_err(|e| todo!("Convert to correct error type"))
+            .boxed();
+        exchange.set_input(boxed_body);
+        exchange.set_metadata(parts);
+        Ok(exchange)
+    }
+}
 
 // Simplified type alias for the complete router
 type HyperRouter = idemio::router::RequestRouter<
@@ -35,7 +73,7 @@ type HyperRouter = idemio::router::RequestRouter<
     HyperExchangeFactory,
     DefaultExecutor<BoxBody<Bytes, std::io::Error>>,
     HttpPathMethodMatcher<
-        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>
+        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
     >,
 >;
 
@@ -44,27 +82,11 @@ struct IdempotentLoggingHandlerConfig;
 
 #[derive(Debug)]
 struct IdempotentLoggingHandler;
-
-#[async_trait]
-impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
-for IdempotentLoggingHandler
-{
-    async fn exec(
-        &self,
-        _exchange: &mut Exchange<
-            BoxBody<Bytes, std::io::Error>,
-            BoxBody<Bytes, std::io::Error>,
-            Parts,
-        >,
-    ) -> Result<HandlerStatus, Infallible> {
+idemio_handler!(IdempotentLoggingHandler, BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts,
+    |handler, exchange|{
         println!("Processing request with idempotent logging handler");
-        Ok(HandlerStatus::new(ExchangeState::OK))
-    }
-
-    fn name(&self) -> &str {
-        "idempotent_logging_handler"
-    }
-}
+        Ok(HandlerStatus::new(ExchangeState::LIVE))
+});
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct GreetingHandlerConfig {
@@ -76,22 +98,12 @@ struct GreetingHandler {
     config: HandlerConfig<GreetingHandlerConfig>,
 }
 
-#[async_trait]
-impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
-for GreetingHandler
-{
-    async fn exec(
-        &self,
-        exchange: &mut Exchange<
-            BoxBody<Bytes, std::io::Error>,
-            BoxBody<Bytes, std::io::Error>,
-            Parts,
-        >,
-    ) -> Result<HandlerStatus, Infallible> {
-        let input = match exchange.take_input().await {
+idemio_handler!(GreetingHandler, BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts,
+    |handler, exchange|{
+    let input = match exchange.take_input().await {
             Ok(input) => input,
             Err(e) => {
-                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                return Ok(HandlerStatus::new(ExchangeState::ERROR)
                     .message(format!("Could not consume input from exchange: {}", e)));
             }
         };
@@ -100,13 +112,13 @@ for GreetingHandler
         let input_bytes = match input.collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(e) => {
-                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                return Ok(HandlerStatus::new(ExchangeState::ERROR)
                     .message(format!("Could not read input body: {}", e)));
             }
         };
 
         let input_str = String::from_utf8_lossy(&input_bytes).to_string();
-        let response_text = &self.config.config().get().response_text;
+        let response_text = &handler.config.config().get().response_text;
         let response = if input_str.trim().is_empty() {
             response_text.clone()
         } else {
@@ -118,15 +130,8 @@ for GreetingHandler
                 .map_err(|_| unreachable!("Infallible"))
                 .boxed(),
         );
-        Ok(HandlerStatus::new(
-            ExchangeState::OK | ExchangeState::EXCHANGE_COMPLETED,
-        ))
-    }
-
-    fn name(&self) -> &str {
-        "greeting_handler"
-    }
-}
+        Ok(HandlerStatus::new(ExchangeState::COMPLETED))
+});
 
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 struct EchoHandlerConfig {
@@ -140,7 +145,7 @@ struct EchoHandler {
 
 #[async_trait]
 impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
-for EchoHandler
+    for EchoHandler
 {
     async fn exec(
         &self,
@@ -153,7 +158,7 @@ for EchoHandler
         let input = match exchange.take_input().await {
             Ok(input) => input,
             Err(e) => {
-                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                return Ok(HandlerStatus::new(ExchangeState::ERROR)
                     .message(format!("Could not consume input from exchange: {}", e)));
             }
         };
@@ -162,7 +167,7 @@ for EchoHandler
         let input_bytes = match input.collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(e) => {
-                return Ok(HandlerStatus::new(ExchangeState::SERVER_ERROR)
+                return Ok(HandlerStatus::new(ExchangeState::ERROR)
                     .message(format!("Could not read input body: {}", e)));
             }
         };
@@ -182,13 +187,7 @@ for EchoHandler
                 .map_err(|_| unreachable!("Infallible"))
                 .boxed(),
         );
-        Ok(HandlerStatus::new(
-            ExchangeState::OK | ExchangeState::EXCHANGE_COMPLETED,
-        ))
-    }
-
-    fn name(&self) -> &str {
-        "echo_handler"
+        Ok(HandlerStatus::new(ExchangeState::COMPLETED))
     }
 }
 

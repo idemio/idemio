@@ -64,7 +64,7 @@ impl Handler<LambdaExchange> for TestLambdaHandler {
             Ok(input) => input,
             Err(e) => {
                 return Ok(
-                    HandlerStatus::new(idemio::status::ExchangeState::SERVER_ERROR)
+                    HandlerStatus::new(idemio::status::ExchangeState::ERROR)
                         .message(format!("Could not consume input from exchange: {}", e)),
                 );
             }
@@ -73,13 +73,7 @@ impl Handler<LambdaExchange> for TestLambdaHandler {
         let mut response = ApiGatewayProxyResponse::default();
         response.body = Some(Body::Text(body));
         exchange.set_output(response);
-        Ok(HandlerStatus::new(
-            ExchangeState::OK | ExchangeState::EXCHANGE_COMPLETED,
-        ))
-    }
-
-    fn name(&self) -> &str {
-        "TestLambdaHandler"
+        Ok(HandlerStatus::new(ExchangeState::COMPLETED))
     }
 }
 
@@ -129,8 +123,7 @@ fn main() -> Result<(), Error> {
 
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()
-        .unwrap()
+        .build()?
         .block_on(async {
             init_default_subscriber();
             lambda_runtime::run(service_fn(|event| entry(event, router.clone()))).await

@@ -23,11 +23,7 @@ impl Handler<Exchange<(), (), ()>> for DummyHandler {
         &self,
         _exchange: &mut Exchange<(), (), ()>,
     ) -> Result<HandlerStatus, Infallible> {
-        Ok(HandlerStatus::new(ExchangeState::OK))
-    }
-
-    fn name(&self) -> &str {
-        "dummy"
+        Ok(HandlerStatus::new(ExchangeState::LIVE))
     }
 }
 

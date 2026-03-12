@@ -286,7 +286,7 @@ impl Attachments {
             .insert(AttachmentKey::new(key, type_id), Box::new(value));
     }
 
-    /// Retrieves a reference to a typed value.
+    /// Retrieves a reference to a typed attachment.
     ///
     /// # Examples
     /// ```rust
@@ -378,19 +378,17 @@ pub struct AttachmentKey {
 
 impl AttachmentKey {
     pub fn new(key: impl AsRef<str>, type_id: TypeId) -> Self {
-        let key = key.as_ref();
-        let mut key_hasher = FnvHasher::default();
-        key.hash(&mut key_hasher);
-        let key_hash = key_hasher.finish();
-
-        let mut type_hasher = FnvHasher::default();
-        type_id.hash(&mut type_hasher);
-        let type_hash = type_hasher.finish();
-
+        let key_hash = Self::hash(key.as_ref());
+        let type_hash = Self::hash(type_id);
         Self {
             key_hash,
             type_hash,
         }
+    }
+    fn hash(in_string: impl Hash) -> u64 {
+        let mut hasher = FnvHasher::default();
+        in_string.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -417,7 +415,6 @@ where
 mod test {
     use super::*;
     use crate::exchange::Attachments;
-    use hyper::body::Bytes;
 
     struct TestStruct;
 
@@ -442,37 +439,6 @@ mod test {
             assert!(attachments.get::<bool>(key3).is_some());
             assert!(attachments.get::<TestStruct>(key4).is_some());
         }
-    }
-
-    #[tokio::test]
-    async fn test_unified_exchange_buffered() {
-        let mut exchange: Exchange<Bytes, Bytes, ()> = Exchange::new();
-
-        // Test buffered input
-        exchange.set_input(Bytes::from("test input"));
-        assert!(exchange.has_input());
-
-        // Test buffered output
-        exchange.set_output(Bytes::from("test output"));
-        assert!(exchange.has_output());
-
-        let output = exchange.take_output().await.unwrap();
-        assert_eq!(output, Bytes::from("test output"));
-    }
-
-    #[tokio::test]
-    async fn test_unified_exchange_callbacks() {
-        let mut exchange: Exchange<Bytes, Bytes, ()> = Exchange::new();
-
-        exchange.add_input_listener(|input: &mut Bytes, _| {
-            let mut new_data = b"prefix:".to_vec();
-            new_data.extend_from_slice(input);
-            *input = Bytes::from(new_data);
-        });
-
-        exchange.set_input(Bytes::from("test"));
-        let input = exchange.take_input().await.unwrap();
-        assert_eq!(input, Bytes::from("prefix:test"));
     }
 
     #[tokio::test]

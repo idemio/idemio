@@ -46,7 +46,6 @@ pub enum RouterError {
 }
 
 impl RouterError {
-
     #[inline]
     pub fn missing_route(key1: impl Into<String>, key2: impl Into<String>) -> Self {
         RouterError::MissingRoute {
@@ -150,7 +149,10 @@ where
     Factory: ExchangeFactory<Request, Exchange> + Send + Sync,
 {
     /// Adds a handler executor to the builder and transitions to WithExecutor state.
-    pub fn executor<Executor>(self, executor: Executor) -> RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
+    pub fn executor<Executor>(
+        self,
+        executor: Executor,
+    ) -> RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
     where
         Executor: HandlerExecutor<Exchange> + Send + Sync,
     {
@@ -165,7 +167,8 @@ where
 }
 
 // With executor state
-impl<Request, Exchange, Factory, Executor> RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
+impl<Request, Exchange, Factory, Executor>
+    RouterBuilder<Request, Exchange, WithExecutor<Factory, Executor>>
 where
     Request: Send + Sync,
     Exchange: Send + Sync,
@@ -173,7 +176,10 @@ where
     Executor: HandlerExecutor<Exchange> + Send + Sync,
 {
     /// Adds a path matcher to the builder and transitions to Complete state.
-    pub fn matcher<Matcher>(self, matcher: Matcher) -> RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
+    pub fn matcher<Matcher>(
+        self,
+        matcher: Matcher,
+    ) -> RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
     where
         Matcher: PathMatcher<Exchange> + Send + Sync,
     {
@@ -189,7 +195,8 @@ where
 }
 
 // Complete state - ready to build
-impl<Request, Exchange, Factory, Executor, Matcher> RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
+impl<Request, Exchange, Factory, Executor, Matcher>
+    RouterBuilder<Request, Exchange, Complete<Factory, Executor, Matcher>>
 where
     Request: Send + Sync,
     Exchange: Send + Sync,
@@ -211,7 +218,7 @@ where
 // Router trait implementation
 #[async_trait]
 impl<Request, Exchange, Factory, Executor, Matcher> Router<Request, Executor::Output>
-for RequestRouter<Request, Exchange, Factory, Executor, Matcher>
+    for RequestRouter<Request, Exchange, Factory, Executor, Matcher>
 where
     Request: Send + Sync,
     Exchange: Send + Sync,
@@ -221,16 +228,13 @@ where
     Matcher: PathMatcher<Exchange> + Send + Sync,
 {
     /// Routes a request through the configured pipeline and returns the result.
-    async fn route(&self, request: Request) -> Result<Executor::Output, crate::router::RouterError> {
+    async fn route(&self, request: Request) -> Result<Executor::Output, RouterError> {
         let route_key = self
             .factory
             .extract_route_info(&request)
             .await
             .map_err(|e| {
-                crate::router::RouterError::invalid_exchange(
-                    "Failed to extract route info from request",
-                    e,
-                )
+                RouterError::invalid_exchange("Failed to extract route info from request", e)
             })?;
 
         let handler_chain = self
@@ -239,10 +243,7 @@ where
             .ok_or_else(|| todo!("Handle missing route error"))?;
 
         let mut exchange = self.factory.create_exchange(request).await.map_err(|e| {
-            crate::router::RouterError::invalid_exchange(
-                "Failed to create exchange from request",
-                e,
-            )
+            RouterError::invalid_exchange("Failed to create exchange from request", e)
         })?;
 
         let result = self

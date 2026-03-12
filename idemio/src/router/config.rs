@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 
 /// Top-level configuration structure for router services
 ///
@@ -140,6 +141,15 @@ pub enum Routes {
     HttpHeaderPaths(HashMap<String, HashMap<String, PathChain>>),
 }
 
+impl Display for Routes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Routes::HttpRequestPaths(_) => {write!(f, "HttpRequestPaths")},
+            Routes::HttpHeaderPaths(_) => {write!(f, "HttpHeaderPaths")},
+        }
+    }
+}
+
 /// Handler chain definition for a specific route
 ///
 /// This structure defines the complete handler execution pipeline for a route,
@@ -200,28 +210,12 @@ impl PathChain {
     }
 
     /// Set the termination handler for this path chain
-    ///
-    /// # Arguments
-    ///
-    /// * `handler` - Name of the termination handler
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining
     fn termination_handler(&mut self, handler: impl Into<String>) -> &mut Self {
         self.termination_handler = Some(handler.into());
         self
     }
 
     /// Add a handler to the response processing phase
-    ///
-    /// # Arguments
-    ///
-    /// * `handler` - Name of the handler to add to the response phase
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining
     fn add_response_handler(&mut self, handler: impl Into<String>) -> &mut Self {
         self.response_handlers
             .get_or_insert_with(Vec::new)
@@ -237,17 +231,11 @@ impl Default for PathChain {
     }
 }
 
-/// Builder patterns for constructing router configurations
-///
-/// This module provides fluent builder APIs for creating complex router configurations
-/// programmatically. It supports both single service and shared multiservice configurations.
+/// Builder router configurations
 pub mod builder {
     use super::*;
 
-    /// Core configuration data shared across builders
-    ///
-    /// This structure holds the fundamental routing data that gets built up
-    /// through the various builder patterns.
+    /// 'Core' configuration data shared across builders
     pub struct ServiceConfigCore {
         /// Set of available handler names
         handlers: HashSet<String>,
@@ -264,7 +252,6 @@ pub mod builder {
     }
 
     impl ServiceConfigCore {
-        /// Create a new empty service configuration core
         pub fn new() -> Self {
             Self {
                 handlers: HashSet::new(),
@@ -403,9 +390,6 @@ pub mod builder {
     }
 
     /// Trait for route-level configuration builders
-    ///
-    /// This trait provides the interface for configuring individual routes
-    /// and their associated HTTP methods.
     pub trait RouteBuilder: Sized {
         /// The method builder type for this route builder
         type MethodBuilder;
@@ -459,9 +443,6 @@ pub mod builder {
     }
 
     /// Trait for method-level configuration builders
-    ///
-    /// This trait provides the interface for configuring handler chains
-    /// for specific route/method combinations.
     pub trait MethodBuilder: Sized {
         /// The parent route builder type
         type RouteBuilder;
