@@ -9,10 +9,10 @@ use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::{ExchangeFactory, ExchangeFactoryError, RouteInfo};
 use idemio::router::path::http::HttpPathMethodMatcher;
 use idemio::router::path::PathMatcher;
-use idemio::router::{RequestRouter, Router, RouterBuilder};
+use idemio::router::{RequestRouter, Router};
 use idemio::status::{ExchangeState, HandlerStatus};
 use lambda_http::aws_lambda_events::apigw::{ApiGatewayProxyRequest, ApiGatewayProxyResponse};
-use lambda_http::{lambda_runtime, service_fn, Body, Context, Error, LambdaEvent};
+use lambda_http::{lambda_runtime, service_fn, Body, Error, LambdaEvent};
 use lambda_runtime::tracing::init_default_subscriber;
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -95,11 +95,12 @@ fn create_router() -> AwsLambdaRouter {
         _phantom: Default::default(),
     };
     let factory = LambdaExchangeFactory;
-    RouterBuilder::new()
-        .factory(factory)
-        .executor(executor)
-        .matcher(matcher)
-        .build()
+    RequestRouter {
+        factory,
+        executor,
+        matcher,
+        _phantom: Default::default(),
+    }
 }
 
 async fn entry(
@@ -107,7 +108,6 @@ async fn entry(
     router: Arc<AwsLambdaRouter>,
 ) -> Result<ApiGatewayProxyResponse, Error> {
     let request = event.payload;
-    let context = event.context;
     match router.route(request).await {
         Ok(response) => Ok(response),
         Err(e) => {

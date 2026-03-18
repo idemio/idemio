@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
-use hyper::http::request::Parts;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
@@ -24,7 +23,7 @@ use idemio::router::executor::DefaultExecutor;
 use idemio::router::factory::{ExchangeFactory, ExchangeFactoryError, RouteInfo};
 use idemio::router::path::http::HttpPathMethodMatcher;
 use idemio::router::path::PathMatcher;
-use idemio::router::{Router, RouterBuilder, RouterError};
+use idemio::router::{RequestRouter, Router, RouterError};
 use idemio::status::{ExchangeState, HandlerStatus};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -56,9 +55,9 @@ impl
         ExchangeFactoryError,
     > {
         let mut exchange = Exchange::new();
-        let (parts, body) = request.into_parts();
+        let (_, body) = request.into_parts();
         let boxed_body = body
-            .map_err(|e| todo!("Convert to correct error type"))
+            .map_err(|_e| todo!("Convert to correct error type"))
             .boxed();
         exchange.set_input(boxed_body);
         Ok(exchange)
@@ -82,7 +81,7 @@ struct IdempotentLoggingHandlerConfig;
 #[derive(Debug)]
 struct IdempotentLoggingHandler;
 idemio_handler!(IdempotentLoggingHandler, BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>,
-    |handler, exchange|{
+    |_handler, _exchange|{
         println!("Processing request with idempotent logging handler");
         Ok(HandlerStatus::new(ExchangeState::LIVE))
 });
@@ -276,12 +275,12 @@ fn create_router() -> HyperRouter {
     let matcher = HttpPathMethodMatcher::new(&router_config, &handler_registry).unwrap();
     let executor = DefaultExecutor { _phantom: std::marker::PhantomData::<BoxBody<Bytes, std::io::Error>>::default() };
     let factory = HyperExchangeFactory;
-
-    RouterBuilder::new()
-        .factory(factory)
-        .executor(executor)
-        .matcher(matcher)
-        .build()
+    RequestRouter {
+        factory,
+        executor,
+        matcher,
+        _phantom: Default::default(),
+    }
 }
 
 async fn handle_request(
