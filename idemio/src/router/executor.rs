@@ -116,11 +116,10 @@ pub trait ExtractOutput<Output> {
 }
 
 #[async_trait]
-impl<In, Out, Meta> ExtractOutput<Out> for Exchange<In, Out, Meta>
+impl<In, Out> ExtractOutput<Out> for Exchange<In, Out>
 where
     In: Send + Sync,
     Out: Send + Sync,
-    Meta: Send + Sync,
 {
     async fn extract_output(&mut self) -> Result<Out, ExchangeError> {
         self.take_output().await

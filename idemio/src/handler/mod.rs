@@ -43,12 +43,11 @@ macro_rules! idemio_handler {
         $handler_struct:ty,
         $input:ty,
         $output:ty,
-        $metadata:ty,
         |$handler:ident, $exchange:ident| $implementation:block
     ) => {
         #[async_trait]
-        impl Handler<Exchange<$input, $output, $metadata>> for $handler_struct {
-            async fn exec(&self, inner_exchange: &mut Exchange<$input, $output, $metadata>) -> Result<HandlerStatus, Infallible> {
+        impl Handler<Exchange<$input, $output>> for $handler_struct {
+            async fn exec(&self, inner_exchange: &mut Exchange<$input, $output>) -> Result<HandlerStatus, Infallible> {
                 let $handler = &self;
                 let $exchange = inner_exchange;
                 $implementation

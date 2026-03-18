@@ -114,10 +114,10 @@ mod tests {
     }
 
     #[async_trait]
-    impl Handler<Exchange<String, String, ()>> for TestHandler {
+    impl Handler<Exchange<String, String>> for TestHandler {
         async fn exec(
             &self,
-            _exchange: &mut Exchange<String, String, ()>,
+            _exchange: &mut Exchange<String, String>,
         ) -> Result<HandlerStatus, Infallible> {
             Ok(HandlerStatus::new(ExchangeState::LIVE))
         }
@@ -127,10 +127,10 @@ mod tests {
     struct AnotherTestHandler;
 
     #[async_trait]
-    impl Handler<Exchange<String, String, ()>> for AnotherTestHandler {
+    impl Handler<Exchange<String, String>> for AnotherTestHandler {
         async fn exec(
             &self,
-            _exchange: &mut Exchange<String, String, ()>,
+            _exchange: &mut Exchange<String, String>,
         ) -> Result<HandlerStatus, Infallible> {
             Ok(HandlerStatus::new(ExchangeState::COMPLETED))
         }
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_register_multiple_handlers_success() {
-        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
+        let mut registry = HandlerRegistry::<Exchange<String, String>>::new();
 
         let handler1_id = HandlerId::new("handler_1");
         let handler1 = TestHandler::new("handler_1");
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_register_handler_with_conflicting_id() {
-        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
+        let mut registry = HandlerRegistry::<Exchange<String, String>>::new();
         let handler_id = HandlerId::new("duplicate_handler");
 
         let handler1 = TestHandler::new("first_handler");
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_find_nonexistent_handler() {
-        let registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
+        let registry = HandlerRegistry::<Exchange<String, String>>::new();
         let nonexistent_id = HandlerId::new("nonexistent_handler");
 
         let result = registry.find_with_id(&nonexistent_id);
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_find_handler_after_multiple_registrations() {
-        let mut registry = HandlerRegistry::<Exchange<String, String, ()>>::new();
+        let mut registry = HandlerRegistry::<Exchange<String, String>>::new();
 
         let handler1_id = HandlerId::new("handler_alpha");
         let handler1 = TestHandler::new("handler_alpha");
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_empty_registry_operations() {
-        let registry = HandlerRegistry::<Exchange<(), (), ()>>::new();
+        let registry = HandlerRegistry::<Exchange<(), ()>>::new();
         let some_id = HandlerId::new("any_id");
         let result = registry.find_with_id(&some_id);
         assert!(result.is_err());

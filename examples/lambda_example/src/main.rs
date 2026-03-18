@@ -17,7 +17,7 @@ use lambda_runtime::tracing::init_default_subscriber;
 use std::convert::Infallible;
 use std::sync::Arc;
 
-type LambdaExchange = Exchange<ApiGatewayProxyRequest, ApiGatewayProxyResponse, Context>;
+type LambdaExchange = Exchange<ApiGatewayProxyRequest, ApiGatewayProxyResponse>;
 type LambdaPathRouter = HttpPathMethodMatcher<LambdaExchange>;
 type IncomingLambdaRequest = ApiGatewayProxyRequest;
 type OutgoingLambdaResponse = ApiGatewayProxyResponse;

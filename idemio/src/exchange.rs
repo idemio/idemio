@@ -10,24 +10,13 @@ use uuid::Uuid;
 ///
 /// # Type Parameters
 /// - `I`: Input data type that must implement `Send + Sync`
-/// - `O`: Output data type that must implement `Send + Sync`  
-/// - `M`: Metadata type that must implement `Send + Sync`
-///
-/// # Behavior
-/// Provides a structured way to handle data exchange with support for:
-/// - Input/output data management with optional buffering
-/// - Metadata attachment for contextual information
-/// - Listener callbacks for data processing
-/// - Type-safe attachments collection
-/// - Unique identification via UUID
-pub struct Exchange<I, O, M>
+/// - `O`: Output data type that must implement `Send + Sync`
+pub struct Exchange<I, O>
 where
     I: Send + Sync,
     O: Send + Sync,
-    M: Send + Sync,
 {
     uuid: Uuid,
-    metadata: Option<M>,
     input: Option<I>,
     output: Option<O>,
     input_listeners: Vec<Callback<I>>,
@@ -35,11 +24,10 @@ where
     attachments: Attachments,
 }
 
-impl<I, O, M> Exchange<I, O, M>
+impl<I, O> Exchange<I, O>
 where
     I: Send + Sync,
     O: Send + Sync,
-    M: Send + Sync,
 {
     /// Creates a new exchange instance with a randomly generated UUID.
     ///
@@ -61,7 +49,6 @@ where
     pub fn new() -> Self {
         Self {
             uuid: Uuid::new_v4(),
-            metadata: None,
             input: None,
             output: None,
             input_listeners: Vec::new(),
@@ -90,39 +77,11 @@ where
     pub fn new_with_uuid(uuid: Uuid) -> Self {
         Self {
             uuid,
-            metadata: None,
             input: None,
             output: None,
             input_listeners: Vec::new(),
             output_listeners: Vec::new(),
             attachments: Attachments::new(),
-        }
-    }
-
-    /// Sets the metadata for this exchange.
-    ///
-    /// # Parameters
-    /// - `metadata`: The metadata value of type `M` to store
-    pub fn set_metadata(&mut self, metadata: M) {
-        self.metadata = Some(metadata);
-    }
-
-    /// Retrieves a reference to the stored metadata.
-    ///
-    /// # Returns
-    /// `Result<&M, ExchangeError>` where:
-    /// - `Ok(&M)` contains a reference to the metadata
-    /// - `Err(ExchangeError)` if no metadata has been set
-    ///
-    /// # Errors
-    /// Returns `ExchangeError::Read` if metadata has not been set.
-    pub fn metadata(&self) -> Result<&M, ExchangeError> {
-        match &self.metadata {
-            None => Err(ExchangeError::read_error(
-                &self.uuid,
-                "Metadata has not been set",
-            )),
-            Some(metadata) => Ok(metadata),
         }
     }
 
@@ -439,14 +398,5 @@ mod test {
             assert!(attachments.get::<bool>(key3).is_some());
             assert!(attachments.get::<TestStruct>(key4).is_some());
         }
-    }
-
-    #[tokio::test]
-    async fn test_unified_exchange_metadata() {
-        let mut exchange: Exchange<(), (), String> = Exchange::new();
-
-        exchange.set_metadata("test metadata".to_string());
-        let metadata = exchange.metadata().unwrap();
-        assert_eq!(metadata, "test metadata");
     }
 }

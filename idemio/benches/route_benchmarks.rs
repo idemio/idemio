@@ -18,10 +18,10 @@ use idemio::router::factory::RouteInfo;
 struct DummyHandler;
 
 #[async_trait]
-impl Handler<Exchange<(), (), ()>> for DummyHandler {
+impl Handler<Exchange<(), ()>> for DummyHandler {
     async fn exec(
         &self,
-        _exchange: &mut Exchange<(), (), ()>,
+        _exchange: &mut Exchange<(), ()>,
     ) -> Result<HandlerStatus, Infallible> {
         Ok(HandlerStatus::new(ExchangeState::LIVE))
     }
@@ -29,7 +29,7 @@ impl Handler<Exchange<(), (), ()>> for DummyHandler {
 
 fn create_populated_dynamic_route_table_v2(
     num_routes: usize,
-) -> HttpPathMethodMatcher<Exchange<(), (), ()>> {
+) -> HttpPathMethodMatcher<Exchange<(), ()>> {
     let mut registry = HandlerRegistry::new();
     registry
         .register_handler(HandlerId::new("test1"), DummyHandler)

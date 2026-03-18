@@ -34,7 +34,7 @@ pub struct HyperExchangeFactory;
 impl
     ExchangeFactory<
         Request<Incoming>,
-        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
+        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>>,
     > for HyperExchangeFactory
 {
     /// Extracts HTTP method and path from a Hyper request.
@@ -52,7 +52,7 @@ impl
         &self,
         request: Request<Incoming>,
     ) -> Result<
-        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
+        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>>,
         ExchangeFactoryError,
     > {
         let mut exchange = Exchange::new();
@@ -61,7 +61,6 @@ impl
             .map_err(|e| todo!("Convert to correct error type"))
             .boxed();
         exchange.set_input(boxed_body);
-        exchange.set_metadata(parts);
         Ok(exchange)
     }
 }
@@ -69,11 +68,11 @@ impl
 // Simplified type alias for the complete router
 type HyperRouter = idemio::router::RequestRouter<
     Request<Incoming>,
-    Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
+    Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>>,
     HyperExchangeFactory,
     DefaultExecutor<BoxBody<Bytes, std::io::Error>>,
     HttpPathMethodMatcher<
-        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>,
+        Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>>,
     >,
 >;
 
@@ -82,7 +81,7 @@ struct IdempotentLoggingHandlerConfig;
 
 #[derive(Debug)]
 struct IdempotentLoggingHandler;
-idemio_handler!(IdempotentLoggingHandler, BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts,
+idemio_handler!(IdempotentLoggingHandler, BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>,
     |handler, exchange|{
         println!("Processing request with idempotent logging handler");
         Ok(HandlerStatus::new(ExchangeState::LIVE))
@@ -98,7 +97,7 @@ struct GreetingHandler {
     config: HandlerConfig<GreetingHandlerConfig>,
 }
 
-idemio_handler!(GreetingHandler, BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts,
+idemio_handler!(GreetingHandler, BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>,
     |handler, exchange|{
     let input = match exchange.take_input().await {
             Ok(input) => input,
@@ -144,15 +143,14 @@ struct EchoHandler {
 }
 
 #[async_trait]
-impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
+impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>>>
     for EchoHandler
 {
     async fn exec(
         &self,
         exchange: &mut Exchange<
             BoxBody<Bytes, std::io::Error>,
-            BoxBody<Bytes, std::io::Error>,
-            Parts,
+            BoxBody<Bytes, std::io::Error>
         >,
     ) -> Result<HandlerStatus, Infallible> {
         let input = match exchange.take_input().await {

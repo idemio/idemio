@@ -280,10 +280,10 @@ mod test {
     struct DummyHandler;
 
     #[async_trait]
-    impl Handler<Exchange<(), (), ()>> for DummyHandler {
+    impl Handler<Exchange<(), ()>> for DummyHandler {
         async fn exec(
             &self,
-            _exchange: &mut Exchange<(), (), ()>,
+            _exchange: &mut Exchange<(), ()>,
         ) -> Result<HandlerStatus, Infallible> {
             Ok(HandlerStatus::new(ExchangeState::LIVE))
         }
@@ -302,7 +302,7 @@ mod test {
     #[rustfmt::skip]
     fn router_v2_test() {
         // Set up a handler registry with test handlers
-        let mut registry = HandlerRegistry::<Exchange<(), (), ()>>::new();
+        let mut registry = HandlerRegistry::<Exchange<(), ()>>::new();
         registry
             .register_handler(HandlerId::new("test1"), DummyHandler)
             .unwrap();
