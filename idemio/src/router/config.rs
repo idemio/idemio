@@ -109,11 +109,11 @@ pub struct SharedConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouterConfig {
     /// Set of all handler names available for routing
-    pub(crate) handlers: HashSet<String>,
+    pub handlers: HashSet<String>,
     /// Named handler chains for reusability
-    pub(crate) chains: HashMap<String, Vec<String>>,
+    pub chains: HashMap<String, Vec<String>>,
     /// Route definitions specifying how requests are handled
-    pub(crate) routes: Routes,
+    pub routes: Routes,
 }
 
 /// Route definition structures for different routing types
@@ -150,31 +150,28 @@ impl Display for Routes {
     }
 }
 
-/// Handler chain definition for a specific route
+/// Handler chain definition for a specific route.
 ///
 /// This structure defines the complete handler execution pipeline for a route,
 /// including request processing, termination, and response processing phases.
-/// All phases are optional, providing flexibility in handler chain design.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathChain {
-    /// Handlers executed during the request processing phase
+    /// Handlers executed during the request processing phase.
     ///
-    /// These handlers run before the termination handler and can modify
-    /// the request, perform authentication, validation, etc.
+    /// These handlers run before the termination handler
     #[serde(skip_serializing_if = "Option::is_none", rename = "request")]
     pub(crate) request_handlers: Option<Vec<String>>,
 
-    /// The termination handler that produces the final response
+    /// The termination handler that produces the final response.
     ///
     /// This handler is responsible for generating the actual response content.
     /// Only one termination handler is allowed per route.
     #[serde(skip_serializing_if = "Option::is_none", rename = "termination")]
     pub(crate) termination_handler: Option<String>,
 
-    /// Handlers executed during the response processing phase
+    /// Handlers executed during the response processing phase.
     ///
-    /// These handlers run after the termination handler and can modify
-    /// the response, add headers, perform logging, etc.
+    /// These handlers run after the termination handler.
     #[serde(skip_serializing_if = "Option::is_none", rename = "response")]
     pub(crate) response_handlers: Option<Vec<String>>,
 }
@@ -194,14 +191,6 @@ impl PathChain {
     }
 
     /// Add a handler to the request processing phase
-    ///
-    /// # Arguments
-    ///
-    /// * `handler` - Name of the handler to add to the request phase
-    ///
-    /// # Returns
-    ///
-    /// A mutable reference to self for method chaining
     fn add_request_handler(&mut self, handler: impl Into<String>) -> &mut Self {
         self.request_handlers
             .get_or_insert_with(Vec::new)
@@ -261,19 +250,11 @@ pub mod builder {
         }
 
         /// Add a single handler to the configuration
-        ///
-        /// # Arguments
-        ///
-        /// * `handler_name` - Name of the handler to register
         pub fn add_handler(&mut self, handler_name: impl Into<String>) {
             self.handlers.insert(handler_name.into());
         }
 
         /// Add multiple handlers to the configuration
-        ///
-        /// # Arguments
-        ///
-        /// * `handler_names` - Slice of handler names to register
         pub fn add_handlers(&mut self, handler_names: &[impl AsRef<str>]) {
             for name in handler_names {
                 self.handlers.insert(name.as_ref().to_string());
@@ -281,11 +262,6 @@ pub mod builder {
         }
 
         /// Add a named handler chain to the configuration
-        ///
-        /// # Arguments
-        ///
-        /// * `chain_name` - Name of the chain for later reference
-        /// * `handler_names` - Ordered list of handlers in the chain
         pub fn add_chain(
             &mut self,
             chain_name: impl Into<String>,
@@ -299,21 +275,11 @@ pub mod builder {
         }
 
         /// Ensure a route path exists in the configuration
-        ///
-        /// # Arguments
-        ///
-        /// * `path` - The route path to ensure exists
         pub fn ensure_route_exists(&mut self, path: &str) {
             self.routes.entry(path.to_string()).or_default();
         }
 
         /// Add a method handler to a specific path
-        ///
-        /// # Arguments
-        ///
-        /// * `path` - The route path
-        /// * `method` - HTTP method (GET, POST, etc.)
-        /// * `path_chain` - Handler chain configuration for this path/method
         pub fn add_method(&mut self, path: &str, method: String, path_chain: PathChain) {
             self.routes
                 .entry(path.to_string())
@@ -322,10 +288,6 @@ pub mod builder {
         }
 
         /// Build the final router configuration
-        ///
-        /// # Returns
-        ///
-        /// A complete `RouterConfig` ready for use
         pub fn build(self) -> RouterConfig {
             RouterConfig {
                 handlers: self.handlers,
@@ -347,31 +309,18 @@ pub mod builder {
         fn core(&mut self) -> &mut ServiceConfigCore;
 
         /// Add a single handler to the service
-        ///
-        /// # Arguments
-        ///
-        /// * `handler_name` - Name of the handler to add
         fn handler(mut self, handler_name: impl Into<String>) -> Self {
             self.core().add_handler(handler_name);
             self
         }
 
         /// Add multiple handlers to the service
-        ///
-        /// # Arguments
-        ///
-        /// * `handler_names` - Slice of handler names to add
         fn handlers(mut self, handler_names: &[impl AsRef<str>]) -> Self {
             self.core().add_handlers(handler_names);
             self
         }
 
         /// Add a named handler chain to the service
-        ///
-        /// # Arguments
-        ///
-        /// * `chain_name` - Name of the chain
-        /// * `handler_names` - Ordered handlers in the chain
         fn chain(
             mut self,
             chain_name: impl Into<String>,
@@ -382,10 +331,6 @@ pub mod builder {
         }
 
         /// Start building a route configuration
-        ///
-        /// # Arguments
-        ///
-        /// * `path` - The route path to configure
         fn route(self, path: impl Into<String>) -> Self::RouteBuilder;
     }
 
@@ -397,10 +342,6 @@ pub mod builder {
         type ServiceBuilder;
 
         /// Create a method builder for a specific HTTP method
-        ///
-        /// # Arguments
-        ///
-        /// * `method` - The HTTP method to configure
         fn create_method_builder(self, method: impl Into<String>) -> Self::MethodBuilder;
 
         /// Finish configuring this route and return to the service builder
@@ -454,10 +395,6 @@ pub mod builder {
         fn chains(&self) -> &HashMap<String, Vec<String>>;
 
         /// Set multiple request handlers
-        ///
-        /// # Arguments
-        ///
-        /// * `handlers` - List of handler names for request processing
         fn request_handlers(mut self, handlers: &[impl AsRef<str>]) -> Self {
             let path_chain = self.path_chain();
             for handler in handlers {
@@ -467,30 +404,18 @@ pub mod builder {
         }
 
         /// Add a single request handler
-        ///
-        /// # Arguments
-        ///
-        /// * `handler` - Handler name for request processing
         fn request_handler(mut self, handler: impl Into<String>) -> Self {
             self.path_chain().add_request_handler(handler);
             self
         }
 
         /// Set the termination handler
-        ///
-        /// # Arguments
-        ///
-        /// * `handler` - Handler name for response generation
         fn termination_handler(mut self, handler: impl Into<String>) -> Self {
             self.path_chain().termination_handler(handler);
             self
         }
 
         /// Set multiple response handlers
-        ///
-        /// # Arguments
-        ///
-        /// * `handlers` - List of handler names for response processing
         fn response_handlers(mut self, handlers: &[impl AsRef<str>]) -> Self {
             let path_chain = self.path_chain();
             for handler in handlers {
@@ -500,20 +425,12 @@ pub mod builder {
         }
 
         /// Add a single response handler
-        ///
-        /// # Arguments
-        ///
-        /// * `handler` - Handler name for response processing
         fn response_handler(mut self, handler: impl Into<String>) -> Self {
             self.path_chain().add_response_handler(handler);
             self
         }
 
         /// Use a pre-defined chain for request processing
-        ///
-        /// # Arguments
-        ///
-        /// * `chain_name` - Name of the chain to use
         fn request_chain(mut self, chain_name: impl AsRef<str>) -> Self {
             if let Some(chain_handlers) = self.chains().get(chain_name.as_ref()) {
                 let handlers: Vec<String> = chain_handlers.clone();
@@ -525,10 +442,6 @@ pub mod builder {
         }
 
         /// Use a pre-defined chain for response processing
-        ///
-        /// # Arguments
-        ///
-        /// * `chain_name` - Name of the chain to use
         fn response_chain(mut self, chain_name: impl AsRef<str>) -> Self {
             if let Some(chain_handlers) = self.chains().get(chain_name.as_ref()) {
                 let handlers: Vec<String> = chain_handlers.clone();
@@ -567,10 +480,6 @@ pub mod builder {
         }
 
         /// Build the final router configuration
-        ///
-        /// # Returns
-        ///
-        /// A complete `RouterConfig` ready for use
         pub fn build(self) -> RouterConfig {
             self.core.build()
         }
@@ -671,20 +580,12 @@ pub mod builder {
         }
 
         /// Set the routing type for service selection
-        ///
-        /// # Arguments
-        ///
-        /// * `route_type` - How to route between services
         pub fn route_type(mut self, route_type: RouteType) -> Self {
             self.key = route_type;
             self
         }
 
         /// Start configuring a specific service
-        ///
-        /// # Arguments
-        ///
-        /// * `service_name` - Name of the service to configure
         pub fn service(self, service_name: impl Into<String>) -> SharedServiceBuilder {
             SharedServiceBuilder {
                 shared_builder: self,

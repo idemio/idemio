@@ -30,22 +30,6 @@ where
     O: Send + Sync,
 {
     /// Creates a new exchange instance with a randomly generated UUID.
-    ///
-    /// # Returns
-    /// A new `Self` instance with empty input, output, metadata, and listeners,
-    /// plus a new attachments collection and auto-generated UUID.
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::Exchange;
-    /// use hyper::body::Bytes;
-    ///
-    /// let exchange: Exchange<Bytes, Bytes, String> = Exchange::new();
-    /// ```
-    ///
-    /// # Behavior
-    /// Initializes all optional fields to `None` and creates empty listener vectors.
-    /// Each exchange gets a unique V4 UUID for identification.
     pub fn new() -> Self {
         Self {
             uuid: Uuid::new_v4(),
@@ -58,22 +42,6 @@ where
     }
 
     /// Creates a new exchange instance with a specific UUID.
-    ///
-    /// # Parameters
-    /// - `uuid`: The UUID to assign to this exchange instance
-    ///
-    /// # Returns
-    /// A new `Self` instance with the provided UUID and empty data fields.
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::Exchange;
-    /// use uuid::Uuid;
-    /// use hyper::body::Bytes;
-    ///
-    /// let uuid = Uuid::new_v4();
-    /// let exchange: Exchange<Bytes, Bytes, String> = Exchange::new_with_uuid(uuid);
-    /// ```
     pub fn new_with_uuid(uuid: Uuid) -> Self {
         Self {
             uuid,

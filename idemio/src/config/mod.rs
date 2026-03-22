@@ -17,6 +17,7 @@ where
     config: Config<C>,
 }
 
+// TODO[TASK] -- This can be removed. We really only need an Id for the config.
 impl<C> Default for HandlerConfig<C>
 where
     C: Default + DeserializeOwned,
@@ -33,6 +34,7 @@ where
     }
 }
 
+// TODO[TASK] -- This can be removed. We really only need an Id for the config.
 impl<C> HandlerConfig<C>
 where
     C: Default + DeserializeOwned,

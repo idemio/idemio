@@ -56,10 +56,6 @@ pub enum HttpPathSegment {
 
 impl Display for HttpPathSegment {
     /// Formats the path segment for display purposes.
-    ///
-    /// # Returns
-    /// - Static segments return their contained string
-    /// - Any segments return "*"
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             HttpPathSegment::Static(s) => write!(f, "{}", s),
@@ -72,9 +68,6 @@ impl FromStr for HttpPathSegment {
     type Err = Infallible;
 
     /// Parses a string into a PathSegment.
-    ///
-    /// # Parameters
-    /// - `s`: String slice to parse. "*" creates a wildcard, anything else creates a static segment.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s == "*" {
             Ok(HttpPathSegment::Any)
@@ -85,28 +78,27 @@ impl FromStr for HttpPathSegment {
 }
 
 /// A node in the path routing tree structure.
-struct HttpPathMethodNode<E>
+struct HttpPathMethodNode<I, O>
 where
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
 {
     /// Child nodes indexed by path segment (static text or wildcard)
-    children: HashMap<HttpPathSegment, HttpPathMethodNode<E>, FnvBuildHasher>,
-    /// Depth of this node in the routing tree (0 = root)
-    //segment_depth: u64,
+    children: HashMap<HttpPathSegment, HttpPathMethodNode<I, O>, FnvBuildHasher>,
     /// HTTP method handlers available at this path depth
-    methods: HashMap<String, Arc<LoadedChain<E>>, FnvBuildHasher>,
+    methods: HashMap<String, Arc<LoadedChain<I, O>>, FnvBuildHasher>,
 }
 
-impl<E> Default for HttpPathMethodNode<E>
+impl<I, O> Default for HttpPathMethodNode<I, O>
 where
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
 {
     /// Creates a new empty PathNode with default FNV-hashed collections.
     fn default() -> Self {
         Self {
             children: HashMap::with_hasher(FnvBuildHasher::default()),
             methods: HashMap::with_hasher(FnvBuildHasher::default()),
-            //segment_depth: 0,
         }
     }
 }
@@ -132,24 +124,26 @@ impl<'a> HttpPathMethodKey<'a> {
     }
 }
 
-pub struct HttpPathMethodMatcher<E>
+pub struct HttpPathMethodMatcher<I, O>
 where
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
 {
     /// Fast hash-based lookup for static paths (no wildcards)
-    static_paths: HashMap<StaticPathMethodKey, Arc<LoadedChain<E>>, FnvBuildHasher>,
+    static_paths: HashMap<StaticPathMethodKey, Arc<LoadedChain<I, O>>, FnvBuildHasher>,
     /// Tree structure for dynamic-path matching with wildcards
-    nodes: HttpPathMethodNode<E>,
+    nodes: HttpPathMethodNode<I, O>,
 }
 
-impl<E> PathMatcher<E> for HttpPathMethodMatcher<E>
+impl<I, O> PathMatcher<I, O> for HttpPathMethodMatcher<I, O>
 where
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
 {
     fn parse_config(
         &mut self,
         route_config: &RouterConfig,
-        handler_registry: &HandlerRegistry<E>,
+        handler_registry: &HandlerRegistry<I, O>,
     ) -> Result<(), PathMatcherError> {
         match &route_config.routes {
             Routes::HttpRequestPaths(paths) => {
@@ -202,7 +196,7 @@ where
         }
     }
 
-    fn lookup(&self, key: RouteInfo<'_>) -> Option<Arc<LoadedChain<E>>> {
+    fn lookup(&self, key: RouteInfo<'_>) -> Option<Arc<LoadedChain<I, O>>> {
         let (path, method) = match (key.path, key.method) {
             (Some(path), Some(method)) => (path, method),
             _ => return None,
@@ -217,7 +211,7 @@ where
 
         // Dynamic path matching with wildcards
         let segments = split_path(&path);
-        let mut best: Option<&HttpPathMethodNode<E>> = None;
+        let mut best: Option<&HttpPathMethodNode<I, O>> = None;
         let mut current = &self.nodes;
 
         for segment_str in segments {
@@ -245,7 +239,7 @@ where
 
     fn new(
         config: &RouterConfig,
-        handler_registry: &HandlerRegistry<E>,
+        handler_registry: &HandlerRegistry<I, O>,
     ) -> Result<Self, PathMatcherError> {
         let mut matcher = Self {
             nodes: HttpPathMethodNode::default(),
@@ -262,47 +256,40 @@ where
 mod test {
     use crate::exchange::Exchange;
     use crate::handler::registry::HandlerRegistry;
-    use crate::handler::Handler;
+    use crate::handler::{Handler, HandlerError, HandlerFlow, HandlerResponse};
     use crate::handler::HandlerId;
     use crate::router::config::builder::{
         MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
     };
     use crate::router::factory::RouteInfo;
     use crate::router::path::{http::HttpPathMethodMatcher, PathMatcher};
-    use crate::status::{ExchangeState, HandlerStatus};
     use async_trait::async_trait;
     use std::convert::Infallible;
 
     /// A simple test handler that does nothing but return an OK status.
-    ///
-    /// Used in unit tests to verify routing functionality without complex business logic.
     #[derive(Debug)]
     struct DummyHandler;
 
     #[async_trait]
-    impl Handler<Exchange<(), ()>> for DummyHandler {
+    impl Handler<(), ()> for DummyHandler {
+        fn id(&self) -> &'static str {
+            "DummyHandler"
+        }
+
         async fn exec(
             &self,
             _exchange: &mut Exchange<(), ()>,
-        ) -> Result<HandlerStatus, Infallible> {
-            Ok(HandlerStatus::new(ExchangeState::LIVE))
+        ) -> HandlerResponse {
+            HandlerFlow::ok()
         }
     }
 
     /// Comprehensive test of PathMatcher functionality including static and dynamic routing.
-    ///
-    /// This test verifies:
-    /// - Handler registration and chain configuration
-    /// - Static path routing for exact matches
-    /// - Wildcard path routing with longest-prefix matching
-    /// - Method-specific routing (GET, POST)
-    /// - Path traversal beyond wildcard matches
-    /// - Rejection of non-matching paths
     #[test]
     #[rustfmt::skip]
     fn router_v2_test() {
         // Set up a handler registry with test handlers
-        let mut registry = HandlerRegistry::<Exchange<(), ()>>::new();
+        let mut registry = HandlerRegistry::<(), ()>::new();
         registry
             .register_handler(HandlerId::new("test1"), DummyHandler)
             .unwrap();

@@ -2,13 +2,12 @@ use async_trait::async_trait;
 use criterion::{Criterion, criterion_group, criterion_main};
 use idemio::exchange::Exchange;
 use idemio::handler::registry::HandlerRegistry;
-use idemio::handler::{Handler, HandlerId};
+use idemio::handler::{Handler, HandlerFlow, HandlerId, HandlerResponse};
 use idemio::router::config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
 use idemio::router::path::PathMatcher;
 use idemio::router::path::http::HttpPathMethodMatcher;
-use idemio::status::{ExchangeState, HandlerStatus};
 use std::convert::Infallible;
 use std::hint::black_box;
 use idemio::router::factory::RouteInfo;
@@ -18,18 +17,22 @@ use idemio::router::factory::RouteInfo;
 struct DummyHandler;
 
 #[async_trait]
-impl Handler<Exchange<(), ()>> for DummyHandler {
+impl Handler<(), ()> for DummyHandler {
+    fn id(&self) -> &'static str {
+        "DummyHandler"
+    }
+
     async fn exec(
         &self,
         _exchange: &mut Exchange<(), ()>,
-    ) -> Result<HandlerStatus, Infallible> {
-        Ok(HandlerStatus::new(ExchangeState::LIVE))
+    ) -> HandlerResponse {
+        HandlerFlow::ok()
     }
 }
 
 fn create_populated_dynamic_route_table_v2(
     num_routes: usize,
-) -> HttpPathMethodMatcher<Exchange<(), ()>> {
+) -> HttpPathMethodMatcher<(), ()> {
     let mut registry = HandlerRegistry::new();
     registry
         .register_handler(HandlerId::new("test1"), DummyHandler)

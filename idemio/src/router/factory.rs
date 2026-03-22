@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use thiserror::Error;
+use crate::exchange::Exchange;
 
 pub struct RouteInfo<'a> {
     pub path: Option<&'a str>,
@@ -12,23 +13,34 @@ impl<'a> RouteInfo<'a> {
     }
 }
 
-#[async_trait]
-pub trait ExchangeFactory<Request, E>
+pub trait IntoRouteInfo<'a> {
+    fn into_route_info(self) -> RouteInfo<'a>;
+}
+
+
+pub trait IntoExchange<I, O> 
 where
-    Self: Send + Sync,
-    Request: Send + Sync,
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
+{
+    fn into_exchange(self) -> Result<Exchange<I, O>, ExchangeFactoryError>;
+}
+
+pub trait ExchangeFactory<I, O>
+where
+    I: Send + Sync,
+    O: Send + Sync,
 {
 
-    async fn extract_route_info<'a>(
+    fn extract_route_info<'a>(
         &self,
-        request: &'a Request,
-    ) -> Result<RouteInfo<'a>, ExchangeFactoryError>;
+        request: &'a I,
+    ) -> RouteInfo<'a>;
 
-    async fn create_exchange<'req>(
+    fn create_exchange<'req>(
         &self,
-        request: Request,
-    ) -> Result<E, ExchangeFactoryError>;
+        request: I,
+    ) -> Exchange<I, O>;
 }
 
 #[derive(Error, Debug)]

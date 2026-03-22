@@ -1,73 +1,95 @@
 pub mod registry;
 
-use crate::config::ConfigProvider;
 use crate::handler::registry::HandlerRegistry;
-use crate::status::HandlerStatus;
 use async_trait::async_trait;
-use serde::de::DeserializeOwned;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use thiserror::Error;
+use crate::exchange::{Exchange, ExchangeError};
 
-pub type SharedHandler<E> = Arc<dyn Handler<E>>;
+pub type HandlerResponse = Result<HandlerFlow, HandlerError>;
 
 #[async_trait]
-pub trait Handler<E>: Send + Sync
+pub trait Handler<I, O>: Send + Sync
 where
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync
 {
-    async fn exec(&self, exchange: &mut E) -> Result<HandlerStatus, Infallible>;
+    fn id(&self) -> &'static str;
+    async fn exec(&self, exchange: &mut Exchange<I, O>) -> HandlerResponse;
 }
 
-//#[async_trait]
-//impl Handler<Exchange<BoxBody<Bytes, std::io::Error>, BoxBody<Bytes, std::io::Error>, Parts>>
-//for IdempotentLoggingHandler
-//{
-//    async fn exec(
-//        &self,
-//        _exchange: &mut Exchange<
-//            BoxBody<Bytes, std::io::Error>,
-//            BoxBody<Bytes, std::io::Error>,
-//            Parts,
-//        >,
-//    ) -> Result<HandlerStatus, Infallible> {
-//        println!("Processing request with idempotent logging handler");
-//        Ok(HandlerStatus::new(ExchangeState::LIVE))
-//    }
-//}
-
-#[macro_export]
-macro_rules! idemio_handler {
-    (
-        $handler_struct:ty,
-        $input:ty,
-        $output:ty,
-        |$handler:ident, $exchange:ident| $implementation:block
-    ) => {
-        #[async_trait]
-        impl Handler<Exchange<$input, $output>> for $handler_struct {
-            async fn exec(&self, inner_exchange: &mut Exchange<$input, $output>) -> Result<HandlerStatus, Infallible> {
-                let $handler = &self;
-                let $exchange = inner_exchange;
-                $implementation
-            }
-        }
-    };
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum HandlerFlow {
+    #[default]
+    Continue,
+    Break
 }
 
-// How to load a handler from a config provider and register it with the handler registry?
-pub trait LoadableHandler<E>: Handler<E>
+impl HandlerFlow {
+    #[inline]
+    pub const fn ok() -> HandlerResponse {
+        Ok(Self::Continue)
+    }
+    #[inline]
+    pub const fn stop() -> HandlerResponse {
+        Ok(Self::Break)
+    }
+}
+
+
+
+#[derive(Debug, Error)]
+pub enum HandlerError 
 where
-    E: Send + Sync,
+    Self: Send + Sync
 {
-    fn load_and_register<C>(
-        registry: &mut HandlerRegistry<E>,
-        config_provider: impl ConfigProvider<C>,
-    ) -> Self
+    #[error("No handler found with the name '{handler_id}'.")]
+    HandlerNotFound {
+        handler_id: &'static str
+    },
+
+    #[error("Error occurred while executing handler '{handler_id}'.")]
+    HandlerException {
+        handler_id: &'static str,
+
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>
+    },
+
+    #[error("Handler '{handler_id}' could not find required data.")]
+    MissingDataError {
+        handler_id: &'static str,
+
+        #[source]
+        source: ExchangeError
+    },
+}
+
+impl HandlerError {
+
+    #[inline]
+    pub fn handler_exception<H, E>(handler_id: &'static str, source: E) -> HandlerError
     where
-        C: Default + DeserializeOwned;
+        E: std::error::Error + Send + Sync + 'static
+    {
+        HandlerError::HandlerException {
+            handler_id,
+            source: Box::new(source)
+        }
+    }
+
+    #[inline]
+    pub const fn missing_data(handler_id: &'static str, source: ExchangeError) -> HandlerError {
+        HandlerError::MissingDataError {
+            handler_id,
+            source
+        }
+    }
 }
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HandlerId {
@@ -77,9 +99,12 @@ pub struct HandlerId {
 impl HandlerId {
     pub fn new(id: impl Into<String>) -> Self {
         let mut hasher = fnv::FnvHasher::default();
-        id.into().hash(&mut hasher);
+        let handler_id = id.into();
+        handler_id.hash(&mut hasher);
         let hash = hasher.finish();
-        Self { handler_hash: hash }
+        Self {
+            handler_hash: hash,
+        }
     }
 }
 

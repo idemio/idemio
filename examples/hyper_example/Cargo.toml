@@ -12,3 +12,4 @@ async-trait = "0.1.89"
 serde = { version = "1.0.228", features = ["derive"] }
 hyper-util = { version = "0.1.17" , features = ["full"]}
 tokio = { version = "1.48.0" , features = ["full"]}
+log = "0.4.27"

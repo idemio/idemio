@@ -5,6 +5,7 @@ use crate::handler::{Handler, HandlerId};
 use crate::router::config::{PathChain, RouterConfig};
 use std::sync::Arc;
 use thiserror::Error;
+use crate::exchange::Exchange;
 use crate::router::factory::RouteInfo;
 
 /// Errors that can occur during PathMatcher construction and operation.
@@ -58,20 +59,22 @@ impl PathMatcherError {
 /// - **Termination handler**: The main handler that processes the request and generates output
 /// - **Response handlers**: Process outgoing data after the main handler (serialization, logging, etc.)
 ///
-/// All handlers are wrapped in `Arc<dyn Handler<E>>` to ensure they can be safely
+/// All handlers are wrapped in `Arc<dyn Handler<Exchange<I, O>>>` to ensure they can be safely
 /// shared across multiple threads and async tasks.
-pub struct LoadedChain<E>
+pub struct LoadedChain<I, O>
 where
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
 {
-    request_handlers: Vec<Arc<dyn Handler<E>>>,
-    termination_handler: Arc<dyn Handler<E>>,
-    response_handlers: Vec<Arc<dyn Handler<E>>>,
+    request_handlers: Vec<Arc<dyn Handler<I, O>>>,
+    termination_handler: Arc<dyn Handler<I, O>>,
+    response_handlers: Vec<Arc<dyn Handler<I, O>>>,
 }
 
-impl<E> LoadedChain<E>
+impl<I, O> LoadedChain<I, O>
 where
-    E: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
 {
     /// Creates a new `LoadedChain` with the specified handlers.
     ///
@@ -83,9 +86,9 @@ where
     /// - `response_handlers`: Vector of handlers to execute after the termination handler.
     ///   These typically handle response transformation, logging, metrics collection, etc.
     pub(crate) fn new(
-        request_handlers: Vec<Arc<dyn Handler<E>>>,
-        termination_handler: Arc<dyn Handler<E>>,
-        response_handlers: Vec<Arc<dyn Handler<E>>>,
+        request_handlers: Vec<Arc<dyn Handler<I, O>>>,
+        termination_handler: Arc<dyn Handler<I, O>>,
+        response_handlers: Vec<Arc<dyn Handler<I, O>>>,
     ) -> Self {
         Self {
             request_handlers,
@@ -95,67 +98,67 @@ where
     }
 
     /// Returns the total number of handlers in this chain.
-    ///
-    /// # Behavior
-    /// Calculates the size using the formula: `request_handlers.len() + 1 + response_handlers.len()`.
     pub fn size(&self) -> usize {
         self.request_handlers.len() + 1 + self.response_handlers.len()
     }
 
     /// Returns a reference to the request handlers vector.
-    pub fn request_handlers(&self) -> &Vec<Arc<dyn Handler<E>>> {
+    pub fn request_handlers(&self) -> &Vec<Arc<dyn Handler<I, O>>> {
         &self.request_handlers
     }
 
     /// Returns a reference to the termination handler.
-    pub fn termination_handler(&self) -> &Arc<dyn Handler<E>> {
+    pub fn termination_handler(&self) -> &Arc<dyn Handler<I, O>> {
         &self.termination_handler
     }
 
     /// Returns a reference to the response handlers vector.
-    pub fn response_handlers(&self) -> &Vec<Arc<dyn Handler<E>>> {
+    pub fn response_handlers(&self) -> &Vec<Arc<dyn Handler<I, O>>> {
         &self.response_handlers
     }
 }
 
 /// A trait for matching URL paths to handler chains in the routing system.
-pub trait PathMatcher<Exchange>
+pub trait PathMatcher<I, O>
 where
-    Exchange: Send + Sync,
+    I: Send + Sync,
+    O: Send + Sync,
 {
     /// Parses router configuration and populates the matcher with routes.
     fn parse_config(
         &mut self,
         route_config: &RouterConfig,
-        handler_registry: &HandlerRegistry<Exchange>,
+        handler_registry: &HandlerRegistry<I, O>,
     ) -> Result<(), PathMatcherError>;
 
     /// Looks up a handler chain for the given path and method combination.
-    fn lookup(&self, key: RouteInfo<'_>) -> Option<Arc<LoadedChain<Exchange>>>;
+    fn lookup(&self, key: RouteInfo<'_>) -> Option<Arc<LoadedChain<I, O>>>;
 
     /// Creates a new PathMatcher instance from configuration and handler registry.
     fn new(
         config: &RouterConfig,
-        handler_registry: &HandlerRegistry<Exchange>,
+        handler_registry: &HandlerRegistry<I, O>,
     ) -> Result<Self, PathMatcherError>
     where
         Self: Sized;
 
+    // TODO[TASK] -- Move this out of here
     /// Finds a single handler in the registry by name.
     fn find_in_registry(
         handler: &str,
-        handler_registry: &HandlerRegistry<Exchange>,
-    ) -> Result<Arc<dyn Handler<Exchange>>, PathMatcherError> {
+        handler_registry: &HandlerRegistry<I, O>,
+    ) -> Result<Arc<dyn Handler<I, O>>, PathMatcherError> {
         let handler_id = HandlerId::new(handler);
         handler_registry.find_with_id(&handler_id)
             .map_err(|e| PathMatcherError::registry_error(e))
     }
 
+    // TODO[TASK] -- Move this out of here
     /// Finds multiple handlers in the registry by their names.
     fn find_all_in_registry(
         handlers: &[String],
-        handler_registry: &HandlerRegistry<Exchange>,
-    ) -> Result<Vec<Arc<dyn Handler<Exchange>>>, PathMatcherError> {
+        handler_registry: &HandlerRegistry<I, O>,
+    ) -> Result<Vec<Arc<dyn Handler<I, O>>>, PathMatcherError> {
         let mut registered_handlers = vec![];
         for handler in handlers {
             let registered_handler = Self::find_in_registry(handler, handler_registry)?;
@@ -164,11 +167,12 @@ where
         Ok(registered_handlers)
     }
 
+    // TODO[TASK] -- Move this out of here
     /// Loads handlers from the registry and creates a complete handler chain.
     fn load_handlers(
-        handler_registry: &HandlerRegistry<Exchange>,
+        handler_registry: &HandlerRegistry<I, O>,
         path_chain: &PathChain,
-    ) -> Result<LoadedChain<Exchange>, PathMatcherError> {
+    ) -> Result<LoadedChain<I, O>, PathMatcherError> {
         let registered_request_handlers = match &path_chain.request_handlers {
             Some(handlers) => Self::find_all_in_registry(handlers, handler_registry)?,
             None => vec![],
