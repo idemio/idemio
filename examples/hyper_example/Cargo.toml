@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-idemio = {path = "../../idemio", features = ["hyper"]}
+idemio = {path = "../../idemio"}
 hyper = { version = "1.7.0", features = ["full"] }
 http-body-util = "0.1.3"
 async-trait = "0.1.89"
