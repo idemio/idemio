@@ -6,51 +6,34 @@ use std::hash::{Hash, Hasher};
 use thiserror::Error;
 use uuid::Uuid;
 
-/// A generic exchange container that manages input/output data flow with metadata and attachments.
-///
-/// # Type Parameters
-/// - `I`: Input data type that must implement `Send + Sync`
-/// - `O`: Output data type that must implement `Send + Sync`
-pub struct Exchange<I, O>
+/// A generic container that manages data flow and attachments.
+pub struct Exchange<T>
 where
-    I: Send + Sync,
-    O: Send + Sync,
+    T: Send + Sync
 {
     uuid: Uuid,
-    input: Option<I>,
-    output: Option<O>,
-    input_listeners: Vec<Callback<I>>,
-    output_listeners: Vec<Callback<O>>,
-    attachments: Attachments,
+    data: Option<T>,
+    consume_listeners: Vec<Callback<T>>,
+    attachments: Attachments
 }
 
-impl<I, O> Exchange<I, O>
+impl<T> Exchange<T>
 where
-    I: Send + Sync,
-    O: Send + Sync,
+    T: Send + Sync
 {
     /// Creates a new exchange instance with a randomly generated UUID.
-    pub fn new() -> Self {
+    pub fn new(data: T) -> Self {
         Self {
             uuid: Uuid::new_v4(),
-            input: None,
-            output: None,
-            input_listeners: Vec::new(),
-            output_listeners: Vec::new(),
+            data: Some(data),
+            consume_listeners: Vec::new(),
             attachments: Attachments::new(),
         }
     }
 
-    /// Creates a new exchange instance with a specific UUID.
-    pub fn new_with_uuid(uuid: Uuid) -> Self {
-        Self {
-            uuid,
-            input: None,
-            output: None,
-            input_listeners: Vec::new(),
-            output_listeners: Vec::new(),
-            attachments: Attachments::new(),
-        }
+    /// Returns a reference to the exchange's unique identifier.
+    pub fn uuid(&self) -> &Uuid {
+        &self.uuid
     }
 
     /// Returns a reference to the attachments' collection.
@@ -63,120 +46,50 @@ where
         &mut self.attachments
     }
 
-    /// Adds a callback listener for input processing.
-    ///
-    /// # Parameters
-    /// - `callback`: A closure that takes `&mut I` and `&mut Attachments` and implements
-    ///   `FnMut + Send + Sync + 'static`
-    pub fn add_input_listener(
-        &mut self,
-        callback: impl FnMut(&mut I, &mut Attachments) + Send + Sync + 'static,
-    ) {
-        self.input_listeners.push(Callback::new(callback));
-    }
-
-    /// Adds a callback listener for output processing.
-    ///
-    /// # Parameters
-    /// - `callback`: A closure that takes `&mut O` and `&mut Attachments` and implements
-    ///   `FnMut + Send + Sync + 'static`
-    pub fn add_output_listener(
-        &mut self,
-        callback: impl FnMut(&mut O, &mut Attachments) + Send + Sync + 'static,
-    ) {
-        self.output_listeners.push(Callback::new(callback));
-    }
-
-    /// Returns a reference to the exchange's unique identifier.
-    pub fn uuid(&self) -> &Uuid {
-        &self.uuid
-    }
-
-    /// Sets the input data for this exchange.
-    pub fn set_input(&mut self, input: I) {
-        self.input = Some(input);
-    }
-
     /// Retrieves a reference to the stored input data.
-    pub async fn input(&self) -> Result<&I, ExchangeError> {
-        match &self.input {
+    pub fn data(&self) -> Result<&T, ExchangeError> {
+        match &self.data {
             Some(val) => Ok(val),
-            None => Err(ExchangeError::read_error(&self.uuid, "No input available")),
+            None => Err(ExchangeError::read_error(&self.uuid, "No data available")),
         }
     }
 
-    /// Retrieves mutable reference to the stored input data.
-    pub async fn input_mut(&mut self) -> Result<&mut I, ExchangeError> {
-        match &mut self.input {
+    pub fn data_mut(&mut self) -> Result<&mut T, ExchangeError> {
+        match &mut self.data {
             Some(val) => Ok(val),
             None => Err(ExchangeError::read_error(&self.uuid, "No input available"))
         }
     }
 
-    /// Consumes and returns the stored input data, executing all input listeners.
-    pub async fn take_input(&mut self) -> Result<I, ExchangeError> {
-        match self.input.take() {
+    /// Adds a callback listener for data processing.
+    ///
+    /// # Parameters
+    /// - `callback`: A closure that takes `&mut I` and `&mut Attachments` and implements
+    ///   `FnMut + Send + Sync + 'static`
+    pub fn add_consume_listener(
+        &mut self,
+        callback: impl FnMut(&mut T, &mut Attachments) + Send + Sync + 'static,
+    ) {
+        self.consume_listeners.push(Callback::new(callback));
+    }
+
+    /// Consumes and returns the stored data, executing all consume listeners.
+    pub fn take_data(&mut self) -> Result<T, ExchangeError> {
+        match self.data.take() {
             Some(mut val) => {
-                for mut callback in &mut self.input_listeners.drain(..) {
+                for mut callback in &mut self.consume_listeners.drain(..) {
                     callback.invoke(&mut val, &mut self.attachments);
                 }
                 Ok(val)
             }
             None => Err(ExchangeError::take_error(
                 &self.uuid,
-                "No input available to take",
+                "No data available to take",
             )),
         }
-    }
-
-    /// Sets the output data for this exchange.
-    pub fn set_output(&mut self, output: O) {
-        self.output = Some(output);
-    }
-
-    /// Retrieves a reference to the stored output data.
-    pub async fn output(&self) -> Result<&O, ExchangeError> {
-        match &self.output {
-            Some(val) => Ok(val),
-            None => Err(ExchangeError::read_error(&self.uuid, "No output available")),
-        }
-    }
-
-    /// Retrieves mutable reference to the stored output data.
-    pub async fn output_mut(&mut self) -> Result<&mut O, ExchangeError> {
-        match &mut self.output {
-            Some(val) => Ok(val),
-            None => Err(ExchangeError::read_error(&self.uuid, "No output available")),
-        }
-    }
-
-    /// Consumes and returns the stored output data, executing all output listeners.
-    pub async fn take_output(&mut self) -> Result<O, ExchangeError> {
-        match self.output.take() {
-            Some(mut val) => {
-                // Execute callbacks
-                for mut callback in &mut self.output_listeners.drain(..) {
-                    callback.invoke(&mut val, &mut self.attachments);
-                }
-                Ok(val)
-            }
-            None => Err(ExchangeError::take_error(
-                &self.uuid,
-                "No output available to take",
-            )),
-        }
-    }
-
-    /// Checks if input data is currently available.
-    pub fn has_input(&self) -> bool {
-        self.input.is_some()
-    }
-
-    /// Checks if output data is currently available.
-    pub fn has_output(&self) -> bool {
-        self.output.is_some()
     }
 }
+
 
 pub struct Attachments {
     attachments: HashMap<AttachmentKey, Box<dyn Any + Send + Sync>, fnv::FnvBuildHasher>,

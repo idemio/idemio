@@ -166,8 +166,8 @@ pub struct PathChain {
     ///
     /// This handler is responsible for generating the actual response content.
     /// Only one termination handler is allowed per route.
-    #[serde(skip_serializing_if = "Option::is_none", rename = "termination")]
-    pub(crate) termination_handler: Option<String>,
+    #[serde(rename = "termination")]
+    pub(crate) termination_handler: String,
 
     /// Handlers executed during the response processing phase.
     ///
@@ -185,7 +185,7 @@ impl PathChain {
     pub fn new() -> Self {
         Self {
             request_handlers: None,
-            termination_handler: None,
+            termination_handler: "default".to_string(),
             response_handlers: None,
         }
     }
@@ -200,7 +200,7 @@ impl PathChain {
 
     /// Set the termination handler for this path chain
     fn termination_handler(&mut self, handler: impl Into<String>) -> &mut Self {
-        self.termination_handler = Some(handler.into());
+        self.termination_handler = handler.into();
         self
     }
 

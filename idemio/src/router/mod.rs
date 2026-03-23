@@ -1,63 +1,73 @@
-pub mod config;
-pub mod factory;
-pub mod path;
+mod config;
+mod path;
+mod route;
+
+pub use config::builder::{
+    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
+    SingleServiceMethodBuilder, SingleServiceRouteBuilder,
+};
+pub use path::{LoadedChain, PathMatcherError, RouteMatcher};
+pub use route::{RouteKey, RouteKeyParser};
+
+#[cfg(feature = "http")]
+pub use path::http::{HeaderKey, HttpPathMethodKey, HttpPathMethodMatcher, HttpPathSegment};
 
 use crate::exchange::Exchange;
-use crate::handler::{Handler, HandlerFlow, HandlerResponse};
-use crate::router::factory::{ExchangeFactory, ExchangeFactoryError};
-use crate::router::path::{LoadedChain, PathMatcher, PathMatcherError};
+use crate::handler::{HandlerFlow, HandlerResponse, MiddlewareHandler};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thiserror::Error;
 
 /// Routes requests to appropriate handlers and returning responses.
-pub struct Router<I, O, Factory, Matcher>
+pub struct Router<I, O, Parser, Matcher>
 where
     Self: Send + Sync,
     I: Send + Sync,
     O: Send + Sync,
-    Factory: ExchangeFactory<I, O> + Send + Sync,
-    Matcher: PathMatcher<I, O> + Send + Sync,
+    Parser: RouteKeyParser<I>,
+    Matcher: RouteMatcher<I, O> + Send + Sync,
 {
     pub _phantom: PhantomData<(I, O)>,
-    pub factory: Factory,
     pub matcher: Matcher,
+    pub parser: Parser,
 }
 
-impl<I, O, Factory, Matcher> Router<I, O, Factory, Matcher>
+impl<I, O, Parser, Matcher> Router<I, O, Parser, Matcher>
 where
     Self: Send + Sync,
     I: Send + Sync,
     O: Send + Sync,
-    Factory: ExchangeFactory<I, O> + Send + Sync,
-    Matcher: PathMatcher<I, O> + Send + Sync,
+    Parser: RouteKeyParser<I> + Send + Sync,
+    Matcher: RouteMatcher<I, O> + Send + Sync,
 {
-    pub fn new(factory: Factory, matcher: Matcher) -> Self {
+    pub fn new(parser: Parser, matcher: Matcher) -> Self {
         Self {
             _phantom: PhantomData,
-            factory,
+            parser,
             matcher,
         }
     }
     /// Routes a request through the routing system and returns a response.
     pub async fn route(&self, request: I) -> Result<O, RouterError> {
-        let route_key = self.factory.extract_route_info(&request);
+        let route_key = self.parser.as_route_key(&request);
         let handler_chain = self
             .matcher
             .lookup(route_key)
             .ok_or_else(|| todo!("Handle missing route error"))?;
-        let mut exchange = self.factory.create_exchange(request);
-        let result = self.execute_handlers(handler_chain, &mut exchange).await?;
+        let result = self.execute_handlers(handler_chain, request).await?;
 
         Ok(result)
     }
 
     /// Executes a chain of handlers.
     /// If the response from executing any of the handlers in the chain is a 'break' or an 'error', return the status.
-    async fn execute_handler_chain(
-        handlers: &Vec<Arc<dyn Handler<I, O>>>,
-        exchange: &mut Exchange<I, O>,
-    ) -> Option<HandlerResponse> {
+    async fn execute_handler_chain<T>(
+        handlers: &Vec<Arc<dyn MiddlewareHandler<T>>>,
+        exchange: &mut Exchange<T>,
+    ) -> Option<HandlerResponse>
+    where
+        T: Send + Sync,
+    {
         for handler in handlers {
             match handler.exec(exchange).await {
                 Ok(flow) => {
@@ -74,16 +84,19 @@ where
     async fn execute_handlers(
         &self,
         executables: Arc<LoadedChain<I, O>>,
-        exchange: &mut Exchange<I, O>,
+        request: I,
     ) -> Result<O, RouterError> {
+        let mut request_exchange = Exchange::new(request);
         let request_handlers = executables.request_handlers();
 
         // Early exit
-        if let Some(status) = Self::execute_handler_chain(&request_handlers, exchange).await {
+        if let Some(status) =
+            Self::execute_handler_chain::<I>(&request_handlers, &mut request_exchange).await
+        {
             match status {
                 Ok(flow) => {
                     if let HandlerFlow::Break = flow {
-                        return Ok(Self::return_output(exchange).await?);
+                        todo!("Early return")
                     }
                 }
                 Err(error) => todo!("Convert error '{error}' into generic O."),
@@ -91,34 +104,40 @@ where
         }
 
         // Execute the Termination Handler
-        match executables.termination_handler().exec(exchange).await {
-            Ok(flow) => {
-                if let HandlerFlow::Break = flow {
-                    return Ok(Self::return_output(exchange).await?);
-                }
-            }
+        let mut response_exchange = match executables
+            .termination_handler()
+            .exec(request_exchange)
+            .await
+        {
+            Ok(output) => Exchange::new(output),
             Err(error) => todo!("Convert error '{error}' into generic O."),
-        }
+        };
         let response_handlers = executables.response_handlers();
 
         // Check for early exit on response handlers.
-        if let Some(status) = Self::execute_handler_chain(response_handlers, exchange).await {
+        if let Some(status) =
+            Self::execute_handler_chain::<O>(response_handlers, &mut response_exchange).await
+        {
             match status {
                 Ok(flow) => {
                     if let HandlerFlow::Break = flow {
-                        return Ok(Self::return_output(exchange).await?);
+                        todo!("Handle early exit on response handlers")
                     }
                 }
                 Err(error) => todo!("Convert error '{error}' into generic O."),
             }
         }
-        Ok(Self::return_output(exchange).await?)
+        response_exchange
+            .take_data()
+            .map_err(|e| todo!("Handle read error on response"))
     }
 
-    async fn return_output(exchange: &mut Exchange<I, O>) -> Result<O, RouterError> {
+    async fn return_output<T>(exchange: &mut Exchange<T>) -> Result<T, RouterError>
+    where
+        T: Send + Sync,
+    {
         exchange
-            .take_output()
-            .await
+            .take_data()
             .map_err(|_| RouterError::MissingResponseError)
     }
 }
@@ -130,12 +149,6 @@ pub enum RouterError {
     MissingRoute { key1: String, key2: String },
     #[error("{message}")]
     ExecutionFailure { message: String },
-    #[error("Error while creating a new exchange. {message}")]
-    InvalidExchange {
-        message: String,
-        #[source]
-        source: ExchangeFactoryError,
-    },
     #[error("Error while building path matcher.")]
     PathMatcherError {
         #[source]
@@ -157,13 +170,5 @@ impl RouterError {
     #[inline]
     pub const fn path_matcher_error(err: PathMatcherError) -> Self {
         RouterError::PathMatcherError { source: err }
-    }
-
-    #[inline]
-    pub fn invalid_exchange(msg: impl Into<String>, err: ExchangeFactoryError) -> Self {
-        RouterError::InvalidExchange {
-            message: msg.into(),
-            source: err,
-        }
     }
 }

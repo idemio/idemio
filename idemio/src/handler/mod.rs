@@ -1,24 +1,34 @@
-pub mod registry;
+mod registry;
 
-use crate::handler::registry::HandlerRegistry;
 use async_trait::async_trait;
-use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 use thiserror::Error;
 use crate::exchange::{Exchange, ExchangeError};
 
+pub use registry::{HandlerRegistryError, HandlerRegistry};
+
 pub type HandlerResponse = Result<HandlerFlow, HandlerError>;
 
+pub trait LabeledHandler {
+    fn id(&self) -> &'static str;
+}
+
 #[async_trait]
-pub trait Handler<I, O>: Send + Sync
+pub trait MiddlewareHandler<T>: LabeledHandler + Send + Sync
+where
+    T: Send + Sync
+{
+    async fn exec(&self, exchange: &mut Exchange<T>) -> HandlerResponse;
+}
+
+#[async_trait]
+pub trait TerminationHandler<I, O>: LabeledHandler + Send + Sync
 where
     I: Send + Sync,
     O: Send + Sync
 {
-    fn id(&self) -> &'static str;
-    async fn exec(&self, exchange: &mut Exchange<I, O>) -> HandlerResponse;
+    async fn exec(&self, exchange: Exchange<I>) -> Result<O, HandlerError>;
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +52,7 @@ impl HandlerFlow {
 
 
 #[derive(Debug, Error)]
-pub enum HandlerError 
+pub enum HandlerError
 where
     Self: Send + Sync
 {
@@ -91,7 +101,7 @@ impl HandlerError {
 }
 
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HandlerId {
     handler_hash: u64,
 }

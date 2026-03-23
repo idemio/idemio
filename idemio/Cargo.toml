@@ -10,6 +10,9 @@ authors = [" Kalev Gonvick kalev.gonvick@idemio.dev"]
 strip = "symbols"
 opt-level = 3
 
+[features]
+http = []
+
 [dependencies]
 async-trait = "0.1.89"
 fnv = "1.0.7"

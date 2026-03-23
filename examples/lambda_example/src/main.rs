@@ -1,68 +1,56 @@
 use async_trait::async_trait;
 use idemio::exchange::Exchange;
-use idemio::handler::registry::HandlerRegistry;
-use idemio::handler::{Handler, HandlerError, HandlerFlow, HandlerId, HandlerResponse};
-use idemio::router::config::builder::{
-    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
+use idemio::handler::{
+    HandlerError, HandlerId, HandlerRegistry, LabeledHandler, TerminationHandler,
 };
-use idemio::router::factory::{ExchangeFactory, ExchangeFactoryError, IntoExchange, RouteInfo};
-use idemio::router::path::http::HttpPathMethodMatcher;
-use idemio::router::path::PathMatcher;
-use idemio::router::{Router};
+use idemio::router::{
+    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyParser, RouteMatcher,
+    Router, ServiceBuilder, SingleServiceConfigBuilder,
+};
 use lambda_http::aws_lambda_events::apigw::{ApiGatewayProxyRequest, ApiGatewayProxyResponse};
 use lambda_http::{lambda_runtime, service_fn, Body, Error, LambdaEvent};
 use lambda_runtime::tracing::init_default_subscriber;
-use std::convert::Infallible;
 use std::sync::Arc;
+struct LambdaRouteParser;
 
-type LambdaExchange = Exchange<ApiGatewayProxyRequest, ApiGatewayProxyResponse>;
-struct LambdaExchangeFactory;
-
-impl ExchangeFactory<ApiGatewayProxyRequest, ApiGatewayProxyResponse> for LambdaExchangeFactory {
-    fn extract_route_info<'a>(&self, request: &'a ApiGatewayProxyRequest) -> RouteInfo<'a> {
+impl RouteKeyParser<ApiGatewayProxyRequest> for LambdaRouteParser {
+    fn as_route_key<'a>(&self, request: &'a ApiGatewayProxyRequest) -> RouteKey<'a> {
         let path = match request.path.as_ref() {
             None => None,
             Some(val) => Some(val.as_str()),
         };
         let method = Some(request.http_method.as_str());
-        RouteInfo { path, method }
-    }
-
-    fn create_exchange<'req>(&self, request: ApiGatewayProxyRequest) -> Exchange<ApiGatewayProxyRequest, ApiGatewayProxyResponse> {
-        let mut exchange = Exchange::new();
-        exchange.set_input(request);
-        exchange
+        RouteKey { path, method }
     }
 }
 
 type AwsLambdaRouter = Router<
     ApiGatewayProxyRequest,
     ApiGatewayProxyResponse,
-    LambdaExchangeFactory,
+    LambdaRouteParser,
     HttpPathMethodMatcher<ApiGatewayProxyRequest, ApiGatewayProxyResponse>,
 >;
 
 struct TestLambdaHandler;
 
-#[async_trait]
-impl Handler<ApiGatewayProxyRequest, ApiGatewayProxyResponse> for TestLambdaHandler {
-    
+impl LabeledHandler for TestLambdaHandler {
     fn id(&self) -> &'static str {
         "TestLambdaHandler"
     }
+}
 
-    async fn exec(&self, exchange: &mut LambdaExchange) -> HandlerResponse {
-        let input = match exchange.take_input().await {
-            Ok(input) => input,
-            Err(e) => {
-                return Err(HandlerError::missing_data(self.id(), e));
-            }
-        };
+#[async_trait]
+impl TerminationHandler<ApiGatewayProxyRequest, ApiGatewayProxyResponse> for TestLambdaHandler {
+    async fn exec(
+        &self,
+        mut exchange: Exchange<ApiGatewayProxyRequest>,
+    ) -> Result<ApiGatewayProxyResponse, HandlerError> {
+        let input = exchange.take_data().expect("Could not take input data");
         let body = input.body.unwrap_or("NoBody".to_string()) + " - TestLambdaHandler";
         let mut response = ApiGatewayProxyResponse::default();
+        response.is_base64_encoded = input.is_base64_encoded;
         response.body = Some(Body::Text(body));
-        exchange.set_output(response);
-        HandlerFlow::ok()
+        Ok(response)
     }
 }
 
@@ -70,7 +58,7 @@ fn create_router() -> AwsLambdaRouter {
     let mut handler_registry = HandlerRegistry::new();
     let handler = TestLambdaHandler;
     handler_registry
-        .register_handler(HandlerId::new("TestLambdaHandler"), handler)
+        .register_termination_handler(HandlerId::new("TestLambdaHandler"), handler)
         .unwrap();
     let router_config = SingleServiceConfigBuilder::new()
         .route("/test")
@@ -80,8 +68,8 @@ fn create_router() -> AwsLambdaRouter {
         .end_route()
         .build();
     let matcher = HttpPathMethodMatcher::new(&router_config, &handler_registry).unwrap();
-    let factory = LambdaExchangeFactory;
-    Router::new(factory, matcher)
+    let parser = LambdaRouteParser;
+    Router::new(parser, matcher)
 }
 
 async fn entry(
@@ -101,7 +89,6 @@ async fn entry(
 
 fn main() -> Result<(), Error> {
     let router = Arc::new(create_router());
-
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?

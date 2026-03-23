@@ -1,7 +1,3 @@
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
@@ -11,69 +7,53 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
 use idemio::exchange::Exchange;
-use idemio::handler::registry::HandlerRegistry;
-use idemio::handler::HandlerId;
-use idemio::handler::{Handler, HandlerFlow, HandlerResponse};
-use idemio::router::config::builder::{
-    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
+use idemio::handler::{
+    HandlerError, HandlerFlow, HandlerId, HandlerRegistry, HandlerResponse, LabeledHandler,
+    MiddlewareHandler, TerminationHandler,
 };
-use idemio::router::factory::{ExchangeFactory, RouteInfo};
-use idemio::router::path::http::HttpPathMethodMatcher;
-use idemio::router::path::PathMatcher;
-use idemio::router::{Router, RouterError};
+use idemio::router::{
+    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyParser, RouteMatcher,
+    Router, RouterError, ServiceBuilder, SingleServiceConfigBuilder,
+};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-pub struct HyperExchangeFactory;
+
 type HyperRequest = Request<BoxBody<Bytes, std::io::Error>>;
 type HyperResponse = Response<BoxBody<Bytes, std::io::Error>>;
 
-async fn request_into_parts(
-    exchange: &mut Exchange<HyperRequest, HyperResponse>,
+fn request_into_parts(
+    exchange: &mut Exchange<HyperRequest>,
 ) -> (request::Parts, BoxBody<Bytes, std::io::Error>) {
-    match exchange.take_input().await {
-        Ok(input) => input.into_parts(),
-        Err(e) => {
-            todo!()
-        }
-    }
+    exchange
+        .take_data()
+        .expect("Could not take request data")
+        .into_parts()
 }
 
-async fn response_into_parts(
-    exchange: &mut Exchange<HyperRequest, HyperResponse>,
+fn response_into_parts(
+    exchange: &mut Exchange<HyperResponse>,
 ) -> (response::Parts, BoxBody<Bytes, std::io::Error>) {
-    match exchange.take_output().await {
-        Ok(output) => output.into_parts(),
-        Err(e) => {
-            todo!()
-        }
-    }
+    exchange
+        .take_data()
+        .expect("Could not take response data")
+        .into_parts()
 }
 
 async fn collect_body(body: BoxBody<Bytes, std::io::Error>) -> Bytes {
-    match body.collect().await {
-        Ok(collected) => collected.to_bytes(),
-        Err(e) => {
-            log::error!("Could not collect body: {}", e);
-            Bytes::new()
-        }
-    }
+    body.collect()
+        .await
+        .expect("Could not collect boxed body")
+        .to_bytes()
 }
-
-impl ExchangeFactory<HyperRequest, HyperResponse> for HyperExchangeFactory {
-    /// Extracts HTTP method and path from a Hyper request.
-    fn extract_route_info<'a>(&self, request: &'a HyperRequest) -> RouteInfo<'a> {
-        RouteInfo::new(request.uri().path(), request.method().as_str())
-    }
-
-    fn create_exchange<'req>(
-        &self,
-        request: HyperRequest,
-    ) -> Exchange<HyperRequest, HyperResponse> {
-        let mut exchange = Exchange::new();
-        exchange.set_input(request);
-        exchange
+pub struct HyperRouteKeyParser;
+impl RouteKeyParser<HyperRequest> for HyperRouteKeyParser {
+    fn as_route_key<'a>(&self, request: &'a HyperRequest) -> RouteKey<'a> {
+        RouteKey::new(request.uri().path(), request.method().as_str())
     }
 }
 
@@ -81,7 +61,7 @@ impl ExchangeFactory<HyperRequest, HyperResponse> for HyperExchangeFactory {
 type HyperRouter = idemio::router::Router<
     HyperRequest,
     HyperResponse,
-    HyperExchangeFactory,
+    HyperRouteKeyParser,
     HttpPathMethodMatcher<HyperRequest, HyperResponse>,
 >;
 
@@ -90,18 +70,19 @@ struct IdempotentLoggingHandlerConfig;
 
 #[derive(Debug)]
 struct IdempotentLoggingHandler;
-#[async_trait]
-impl<I, O> Handler<I, O> for IdempotentLoggingHandler
-where
-    I: Send + Sync,
-    O: Send + Sync,
-{
+impl LabeledHandler for IdempotentLoggingHandler {
     fn id(&self) -> &'static str {
         "IdempotentLoggingHandler"
     }
+}
 
-    async fn exec(&self, exchange: &mut Exchange<I, O>) -> HandlerResponse {
-        log::info!("uuid={}", exchange.uuid().to_string());
+#[async_trait]
+impl<T> MiddlewareHandler<T> for IdempotentLoggingHandler
+where
+    T: Send + Sync,
+{
+    async fn exec(&self, exchange: &mut Exchange<T>) -> HandlerResponse {
+        println!("uuid={}", exchange.uuid().to_string());
         HandlerFlow::ok()
     }
 }
@@ -116,16 +97,20 @@ struct GreetingHandler {
     config: HandlerConfig<GreetingHandlerConfig>,
 }
 
-#[async_trait]
-impl Handler<HyperRequest, HyperResponse> for GreetingHandler {
+impl LabeledHandler for GreetingHandler {
     fn id(&self) -> &'static str {
         "GreetingHandler"
     }
+}
 
-    async fn exec(&self, exchange: &mut Exchange<HyperRequest, HyperResponse>) -> HandlerResponse {
-        let (parts, body) = request_into_parts(exchange).await;
+#[async_trait]
+impl TerminationHandler<HyperRequest, HyperResponse> for GreetingHandler {
+    async fn exec(
+        &self,
+        mut exchange: Exchange<HyperRequest>,
+    ) -> Result<HyperResponse, HandlerError> {
+        let (parts, body) = request_into_parts(&mut exchange);
         let input_bytes = collect_body(body).await;
-
         let input_str = String::from_utf8_lossy(&input_bytes).to_string();
         let response_text = &self.config.config().get().response_text;
         let response = if input_str.trim().is_empty() {
@@ -141,8 +126,7 @@ impl Handler<HyperRequest, HyperResponse> for GreetingHandler {
             .status(StatusCode::OK)
             .body(body)
             .unwrap();
-        exchange.set_output(response);
-        HandlerFlow::ok()
+        Ok(response)
     }
 }
 
@@ -156,14 +140,19 @@ struct EchoHandler {
     config: HandlerConfig<EchoHandlerConfig>,
 }
 
-#[async_trait]
-impl Handler<HyperRequest, HyperResponse> for EchoHandler {
+impl LabeledHandler for EchoHandler {
     fn id(&self) -> &'static str {
         "EchoHandler"
     }
+}
 
-    async fn exec(&self, exchange: &mut Exchange<HyperRequest, HyperResponse>) -> HandlerResponse {
-        let (parts, body) = request_into_parts(exchange).await;
+#[async_trait]
+impl TerminationHandler<HyperRequest, HyperResponse> for EchoHandler {
+    async fn exec(
+        &self,
+        mut exchange: Exchange<HyperRequest>,
+    ) -> Result<HyperResponse, HandlerError> {
+        let (parts, body) = request_into_parts(&mut exchange);
         let input_bytes = collect_body(body).await;
         let input_str = String::from_utf8_lossy(&input_bytes).to_string();
         let processed_input = if self.config.config().get().reverse {
@@ -195,8 +184,7 @@ impl Handler<HyperRequest, HyperResponse> for EchoHandler {
             .status(StatusCode::OK)
             .body(body)
             .unwrap();
-        exchange.set_output(response);
-        HandlerFlow::ok()
+        Ok(response)
     }
 }
 
@@ -222,7 +210,7 @@ fn create_router() -> HyperRouter {
         config: handler_config,
     };
     handler_registry
-        .register_handler(greeting_handler_id, handler)
+        .register_termination_handler(greeting_handler_id, handler)
         .unwrap();
 
     // Register echo handler
@@ -241,7 +229,7 @@ fn create_router() -> HyperRouter {
         config: handler_config,
     };
     handler_registry
-        .register_handler(echo_handler_id, handler)
+        .register_termination_handler(echo_handler_id, handler)
         .unwrap();
 
     // Register idempotent logging handler
@@ -258,7 +246,7 @@ fn create_router() -> HyperRouter {
 
     let handler = IdempotentLoggingHandler;
     handler_registry
-        .register_handler(idempotent_logging_handler_id, handler)
+        .register_request_handler(idempotent_logging_handler_id, handler)
         .unwrap();
 
     let router_config = SingleServiceConfigBuilder::new()
@@ -282,7 +270,7 @@ fn create_router() -> HyperRouter {
         .end_route()
         .build();
     let matcher = HttpPathMethodMatcher::new(&router_config, &handler_registry).unwrap();
-    let factory = HyperExchangeFactory;
+    let factory = HyperRouteKeyParser;
     Router::new(factory, matcher)
 }
 
@@ -302,11 +290,9 @@ async fn handle_request(
     match router.route(req).await {
         Ok(response_body) => Ok(response_body),
         Err(e) => {
-            // Handle routing errors
             println!("Error handling request: {}", e);
             let (status_code, error_message) = match e {
                 RouterError::MissingRoute { .. } => (404, "Route not found"),
-                RouterError::InvalidExchange { .. } => (400, "Bad request"),
                 _ => (500, "Internal server error"),
             };
 

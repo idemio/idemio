@@ -1,50 +1,64 @@
 use async_trait::async_trait;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use idemio::exchange::Exchange;
-use idemio::handler::registry::HandlerRegistry;
-use idemio::handler::{Handler, HandlerFlow, HandlerId, HandlerResponse};
-use idemio::router::config::builder::{
-    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
+use idemio::handler::{
+    HandlerError, HandlerFlow, HandlerId, HandlerRegistry, HandlerResponse, LabeledHandler,
+    MiddlewareHandler, TerminationHandler,
 };
-use idemio::router::path::PathMatcher;
-use idemio::router::path::http::HttpPathMethodMatcher;
-use std::convert::Infallible;
+use idemio::router::{HttpPathMethodMatcher, RouteKey, RouteMatcher};
+use idemio::router::{MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder};
 use std::hint::black_box;
-use idemio::router::factory::RouteInfo;
-// This is a simple benchmark to aid development of the router
-
 #[derive(Debug)]
-struct DummyHandler;
-
-#[async_trait]
-impl Handler<(), ()> for DummyHandler {
+struct DummyMiddlewareHandler;
+impl LabeledHandler for DummyMiddlewareHandler {
     fn id(&self) -> &'static str {
         "DummyHandler"
     }
+}
 
-    async fn exec(
-        &self,
-        _exchange: &mut Exchange<(), ()>,
-    ) -> HandlerResponse {
+#[async_trait]
+impl MiddlewareHandler<()> for DummyMiddlewareHandler {
+    async fn exec(&self, _exchange: &mut Exchange<()>) -> HandlerResponse {
         HandlerFlow::ok()
     }
 }
 
-fn create_populated_dynamic_route_table_v2(
-    num_routes: usize,
-) -> HttpPathMethodMatcher<(), ()> {
+struct DummyTerminationHandler;
+impl LabeledHandler for DummyTerminationHandler {
+    fn id(&self) -> &'static str {
+        "DummyTerminationHandler"
+    }
+}
+
+#[async_trait]
+impl TerminationHandler<(), ()> for DummyTerminationHandler {
+    async fn exec(&self, _exchange: Exchange<()>) -> Result<(), HandlerError> {
+        Ok(())
+    }
+}
+
+fn create_populated_dynamic_route_table_v2(num_routes: usize) -> HttpPathMethodMatcher<(), ()> {
     let mut registry = HandlerRegistry::new();
     registry
-        .register_handler(HandlerId::new("test1"), DummyHandler)
+        .register_request_handler(HandlerId::new("test1req"), DummyMiddlewareHandler)
         .unwrap();
     registry
-        .register_handler(HandlerId::new("test2"), DummyHandler)
+        .register_request_handler(HandlerId::new("test2req"), DummyMiddlewareHandler)
         .unwrap();
     registry
-        .register_handler(HandlerId::new("test3"), DummyHandler)
+        .register_request_handler(HandlerId::new("test3req"), DummyMiddlewareHandler)
         .unwrap();
     registry
-        .register_handler(HandlerId::new("test4"), DummyHandler)
+        .register_response_handler(HandlerId::new("test1res"), DummyMiddlewareHandler)
+        .unwrap();
+    registry
+        .register_response_handler(HandlerId::new("test2res"), DummyMiddlewareHandler)
+        .unwrap();
+    registry
+        .register_response_handler(HandlerId::new("test3res"), DummyMiddlewareHandler)
+        .unwrap();
+    registry
+        .register_termination_handler(HandlerId::new("test4term"), DummyTerminationHandler)
         .unwrap();
 
     let mut builder = SingleServiceConfigBuilder::new();
@@ -57,17 +71,19 @@ fn create_populated_dynamic_route_table_v2(
                 builder = builder
                     .route(path)
                     .get()
-                    .request_handlers(&["test1", "test2", "test3"])
-                    .termination_handler("test4")
+                    .request_handlers(&["test1req", "test2req", "test3req"])
+                    .termination_handler("test4term")
+                    .response_handlers(&["test1res"])
                     .end_method()
                     .end_route();
             }
             _ => {
                 builder = builder
                     .route(path)
-                    .post()
-                    .request_handler("test1")
-                    .termination_handler("test4")
+                    .get()
+                    .request_handler("test1req")
+                    .termination_handler("test4term")
+                    .response_handlers(&["test1res"])
                     .end_method()
                     .end_route();
             }
@@ -78,9 +94,9 @@ fn create_populated_dynamic_route_table_v2(
     builder = builder
         .route("/test/abc/*")
         .get()
-        .request_handlers(&["test1", "test2", "test3"])
-        .termination_handler("test4")
-        .response_handlers(&["test1", "test2", "test3"])
+        .request_handlers(&["test1req", "test2req", "test3req"])
+        .termination_handler("test4term")
+        .response_handlers(&["test1res", "test2res", "test3res"])
         .end_method()
         .end_route();
 
@@ -92,7 +108,7 @@ fn bench_dynamic_route_table(c: &mut Criterion) {
     let table = create_populated_dynamic_route_table_v2(1000);
     c.bench_function("dynamic_route_table_v2", |b| {
         b.iter(|| {
-            black_box(table.lookup(RouteInfo::new("GET", "/test/12345")));
+            black_box(table.lookup(RouteKey::new("GET", "/test/12345")));
         });
     });
 }
