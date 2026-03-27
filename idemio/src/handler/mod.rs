@@ -4,11 +4,11 @@ use async_trait::async_trait;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use thiserror::Error;
-use crate::exchange::{Exchange, ExchangeError};
+use crate::exchange::{Attachments, Exchange, ExchangeError};
 
 pub use registry::{HandlerRegistryError, HandlerRegistry};
-
 pub type HandlerResponse = Result<HandlerFlow, HandlerError>;
+
 
 pub trait LabeledHandler {
     fn id(&self) -> &'static str;
@@ -28,7 +28,7 @@ where
     I: Send + Sync,
     O: Send + Sync
 {
-    async fn exec(&self, exchange: Exchange<I>) -> Result<O, HandlerError>;
+    async fn exec(&self, attachments: &mut Attachments, input: I) -> Result<O, HandlerError>;
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -48,8 +48,6 @@ impl HandlerFlow {
         Ok(Self::Break)
     }
 }
-
-
 
 #[derive(Debug, Error)]
 pub enum HandlerError
@@ -115,6 +113,12 @@ impl HandlerId {
         Self {
             handler_hash: hash,
         }
+    }
+}
+
+impl From<&str> for HandlerId {
+    fn from(value: &str) -> Self {
+        HandlerId::new(value)
     }
 }
 

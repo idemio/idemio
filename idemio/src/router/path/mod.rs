@@ -50,6 +50,8 @@ impl PathMatcherError {
     }
 }
 
+pub type MiddlewareChain<T> = Vec<Arc<dyn MiddlewareHandler<T>>>;
+pub type TerminationPoint<I, O> = Arc<dyn TerminationHandler<I, O>>;
 /// A collection of handlers that are ready to be executed in a specific order.
 ///
 /// # Behavior
@@ -65,9 +67,9 @@ where
     I: Send + Sync,
     O: Send + Sync,
 {
-    request_handlers: Vec<Arc<dyn MiddlewareHandler<I>>>,
-    termination_handler: Arc<dyn TerminationHandler<I, O>>,
-    response_handlers: Vec<Arc<dyn MiddlewareHandler<O>>>,
+    request_handlers: MiddlewareChain<I>,
+    termination_handler: TerminationPoint<I, O>,
+    response_handlers: MiddlewareChain<O>,
 }
 
 impl<I, O> LoadedChain<I, O>
@@ -85,9 +87,9 @@ where
     /// - `response_handlers`: Vector of handlers to execute after the termination handler.
     ///   These typically handle response transformation, logging, metrics collection, etc.
     pub fn new(
-        request_handlers: Vec<Arc<dyn MiddlewareHandler<I>>>,
-        termination_handler: Arc<dyn TerminationHandler<I, O>>,
-        response_handlers: Vec<Arc<dyn MiddlewareHandler<O>>>,
+        request_handlers: MiddlewareChain<I>,
+        termination_handler: TerminationPoint<I, O>,
+        response_handlers: MiddlewareChain<O>,
     ) -> Self {
         Self {
             request_handlers,
@@ -102,26 +104,26 @@ where
     }
 
     /// Returns a reference to the request handlers vector.
-    pub fn request_handlers(&self) -> &Vec<Arc<dyn MiddlewareHandler<I>>> {
+    pub fn request_handlers(&self) -> &MiddlewareChain<I> {
         &self.request_handlers
     }
 
     /// Returns a reference to the termination handler.
-    pub fn termination_handler(&self) -> &Arc<dyn TerminationHandler<I, O>> {
+    pub fn termination_handler(&self) -> &TerminationPoint<I, O> {
         &self.termination_handler
     }
 
     /// Returns a reference to the response handlers vector.
-    pub fn response_handlers(&self) -> &Vec<Arc<dyn MiddlewareHandler<O>>> {
+    pub fn response_handlers(&self) -> &MiddlewareChain<O> {
         &self.response_handlers
     }
 }
 
 /// A trait for matching URL paths to handler chains in the routing system.
-pub trait RouteMatcher<I, O>
+pub trait RouteKeyMatcher<I, O>
 where
     I: Send + Sync,
-    O: Send + Sync,
+    O: Send + Sync
 {
     /// Parses router configuration and populates the matcher with routes.
     fn parse_config(
@@ -146,40 +148,33 @@ where
         handler_registry: &HandlerRegistry<I, O>,
         path_chain: &PathChain,
     ) -> Result<LoadedChain<I, O>, PathMatcherError> {
-        let request_handlers = if let Some(request_handlers) = &path_chain.request_handlers {
-            let mut loaded_handlers = Vec::new();
+        let mut loaded_request_handlers = Vec::new();
+        if let Some(request_handlers) = &path_chain.request_handlers {
             for handler in request_handlers {
-                loaded_handlers.push(
+                loaded_request_handlers.push(
                     handler_registry
                         .get_request_handler(&HandlerId::new(handler))
                         .map_err(|e| PathMatcherError::registry_error(e))?,
                 );
             }
-            loaded_handlers
-        } else {
-            Vec::new()
-        };
+        }
         let termination_handler = handler_registry
             .get_termination_handler(&HandlerId::new(&path_chain.termination_handler))
             .map_err(|e| PathMatcherError::registry_error(e))?;
-
-        let response_handlers = if let Some(response_handlers) = &path_chain.response_handlers {
-            let mut loaded_handlers = Vec::new();
+        let mut loaded_response_handlers = Vec::new();
+        if let Some(response_handlers) = &path_chain.response_handlers {
             for handler in response_handlers {
-                loaded_handlers.push(
+                loaded_response_handlers.push(
                     handler_registry
                         .get_response_handler(&HandlerId::new(handler))
                         .map_err(|e| PathMatcherError::registry_error(e))?,
                 );
             }
-            loaded_handlers
-        } else {
-            Vec::new()
-        };
+        }
         Ok(LoadedChain::new(
-            request_handlers,
+            loaded_request_handlers,
             termination_handler,
-            response_handlers,
+            loaded_response_handlers,
         ))
     }
 }

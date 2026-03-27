@@ -1,4 +1,3 @@
-
 use fnv::FnvHasher;
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -9,23 +8,37 @@ use uuid::Uuid;
 /// A generic container that manages data flow and attachments.
 pub struct Exchange<T>
 where
-    T: Send + Sync
+    T: Send + Sync,
 {
     uuid: Uuid,
-    data: Option<T>,
+    data: T,
     consume_listeners: Vec<Callback<T>>,
-    attachments: Attachments
+    attachments: Attachments,
+}
+
+impl<T> From<(Uuid, Attachments, T)> for Exchange<T> 
+where
+    T: Send + Sync
+{
+    fn from(value: (Uuid, Attachments, T)) -> Self {
+        Self {
+            uuid: value.0,
+            attachments: value.1,
+            data: value.2,
+            consume_listeners: Vec::new()
+        }
+    }
 }
 
 impl<T> Exchange<T>
 where
-    T: Send + Sync
+    T: Send + Sync,
 {
     /// Creates a new exchange instance with a randomly generated UUID.
     pub fn new(data: T) -> Self {
         Self {
             uuid: Uuid::new_v4(),
-            data: Some(data),
+            data,
             consume_listeners: Vec::new(),
             attachments: Attachments::new(),
         }
@@ -47,18 +60,20 @@ where
     }
 
     /// Retrieves a reference to the stored input data.
-    pub fn data(&self) -> Result<&T, ExchangeError> {
-        match &self.data {
-            Some(val) => Ok(val),
-            None => Err(ExchangeError::read_error(&self.uuid, "No data available")),
-        }
+    pub fn data(&self) -> &T {
+        //        match &self.data {
+        //            Some(val) => Ok(val),
+        //            None => Err(ExchangeError::read_error(&self.uuid, "No data available")),
+        //        }
+        &self.data
     }
 
-    pub fn data_mut(&mut self) -> Result<&mut T, ExchangeError> {
-        match &mut self.data {
-            Some(val) => Ok(val),
-            None => Err(ExchangeError::read_error(&self.uuid, "No input available"))
-        }
+    pub fn data_mut(&mut self) -> &mut T {
+        //        match &mut self.data {
+        //            Some(val) => Ok(val),
+        //            None => Err(ExchangeError::read_error(&self.uuid, "No input available"))
+        //        }
+        &mut self.data
     }
 
     /// Adds a callback listener for data processing.
@@ -73,23 +88,18 @@ where
         self.consume_listeners.push(Callback::new(callback));
     }
 
-    /// Consumes and returns the stored data, executing all consume listeners.
-    pub fn take_data(&mut self) -> Result<T, ExchangeError> {
-        match self.data.take() {
-            Some(mut val) => {
-                for mut callback in &mut self.consume_listeners.drain(..) {
-                    callback.invoke(&mut val, &mut self.attachments);
-                }
-                Ok(val)
-            }
-            None => Err(ExchangeError::take_error(
-                &self.uuid,
-                "No data available to take",
-            )),
-        }
+    /// Consumes and returns the stored data, executing all listeners for this exchange.
+    /// 
+    pub fn take_data(mut self) -> (Uuid, Attachments, T) {
+        let uuid = self.uuid;
+        let mut val = self.data;
+        let mut attachments = self.attachments;
+        self.consume_listeners
+            .drain(..)
+            .for_each(|mut listener| listener.invoke(&mut val, &mut attachments));
+        (uuid, attachments, val)
     }
 }
-
 
 pub struct Attachments {
     attachments: HashMap<AttachmentKey, Box<dyn Any + Send + Sync>, fnv::FnvBuildHasher>,

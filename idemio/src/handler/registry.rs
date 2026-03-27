@@ -53,17 +53,18 @@ where
     I: Send + Sync,
     O: Send + Sync,
 {
-    /// A set of all previously registered handlers. 
+    /// A set of all previously registered handlers.
     /// Contains request, termination, and response handler ids
     registered_ids: HashSet<HandlerId>,
-    
-    /// Registered request middlewares. These handlers deal with the input data.
+
+    /// Registered request middlewares.
+    /// These handlers deal with the input data.
     request_handlers: DashMap<HandlerId, Arc<dyn MiddlewareHandler<I>>, fnv::FnvBuildHasher>,
-    
-    /// Registered termination handlers. 
+
+    /// Registered termination handlers.
     /// These handlers deal with converting input data into the expected output data.
     termination_handlers: DashMap<HandlerId, Arc<dyn TerminationHandler<I, O>>, fnv::FnvBuildHasher>,
-    
+
     /// Registered response handlers.
     /// These handlers deal with the output data.
     response_handlers: DashMap<HandlerId, Arc<dyn MiddlewareHandler<O>>, fnv::FnvBuildHasher>,
@@ -77,7 +78,6 @@ where
     /// Creates a new empty handler registry.
     pub fn new() -> Self {
         Self {
-            //handlers: DashMap::with_hasher(fnv::FnvBuildHasher::default()),
             registered_ids: HashSet::new(),
             request_handlers: DashMap::with_hasher(fnv::FnvBuildHasher::default()),
             termination_handlers: DashMap::with_hasher(fnv::FnvBuildHasher::default()),
@@ -116,18 +116,30 @@ where
         }
     }
 
+    fn register_middleware<T>(
+        handler_id: HandlerId,
+        handler: impl MiddlewareHandler<T> + 'static,
+        map: &mut DashMap<HandlerId, Arc<dyn MiddlewareHandler<T>>, fnv::FnvBuildHasher>,
+        registered_ids: &mut HashSet<HandlerId>
+    ) -> Result<(), HandlerRegistryError>
+    where
+        T: Send + Sync
+    {
+        if registered_ids.contains(&handler_id) {
+            return Err(HandlerRegistryError::conflicting_handler_id(handler_id));
+        }
+        let handler = Arc::new(handler);
+        registered_ids.insert(handler_id);
+        map.insert(handler_id, handler);
+        Ok(())
+    }
+
     pub fn register_request_handler(
         &mut self,
         handler_id: HandlerId,
         handler: impl MiddlewareHandler<I> + 'static,
     ) -> Result<(), HandlerRegistryError> {
-        if self.registered_ids.contains(&handler_id) {
-            return Err(HandlerRegistryError::conflicting_handler_id(handler_id));
-        }
-        let handler = Arc::new(handler);
-        self.registered_ids.insert(handler_id);
-        self.request_handlers.insert(handler_id, handler);
-        Ok(())
+        Self::register_middleware(handler_id, handler, &mut self.request_handlers, &mut self.registered_ids)
     }
 
     pub fn register_response_handler(
@@ -135,13 +147,7 @@ where
         handler_id: HandlerId,
         handler: impl MiddlewareHandler<O> + 'static,
     ) -> Result<(), HandlerRegistryError> {
-        if self.registered_ids.contains(&handler_id) {
-            return Err(HandlerRegistryError::conflicting_handler_id(handler_id));
-        }
-        let handler = Arc::new(handler);
-        self.registered_ids.insert(handler_id);
-        self.response_handlers.insert(handler_id, handler);
-        Ok(())
+        Self::register_middleware(handler_id, handler, &mut self.response_handlers, &mut self.registered_ids)
     }
 
     pub fn register_termination_handler(
@@ -163,12 +169,12 @@ where
 mod tests {
     use super::*;
     use crate::exchange::{Exchange};
-    use crate::handler::{HandlerError, HandlerFlow, HandlerResponse, LabeledHandler};
+    use crate::handler::{HandlerFlow, HandlerResponse, LabeledHandler};
     use async_trait::async_trait;
-    use std::convert::Infallible;
+    use idemio_macro::Handler;
 
     // Test handler implementations for comprehensive testing
-    #[derive(Debug)]
+    #[derive(Debug, Handler)]
     struct TestHandler {
         name: String,
     }
@@ -176,12 +182,6 @@ mod tests {
     impl TestHandler {
         fn new(name: impl Into<String>) -> Self {
             Self { name: name.into() }
-        }
-    }
-
-    impl LabeledHandler for TestHandler {
-        fn id(&self) -> &'static str {
-            "TestHandler"
         }
     }
 
@@ -195,13 +195,8 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Handler)]
     struct AnotherTestHandler;
-    impl LabeledHandler for AnotherTestHandler {
-        fn id(&self) -> &'static str {
-            "AnotherTestHandler"
-        }
-    }
     #[async_trait]
     impl MiddlewareHandler<String> for AnotherTestHandler {
         async fn exec(

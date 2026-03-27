@@ -14,6 +14,7 @@ opt-level = 3
 http = []
 
 [dependencies]
+idemio-macro = { path = "../idemio-macro"}
 async-trait = "0.1.89"
 fnv = "1.0.7"
 serde = { version = "1.0.228", features = ["derive"] }

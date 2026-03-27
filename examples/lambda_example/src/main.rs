@@ -1,24 +1,22 @@
 use async_trait::async_trait;
-use idemio::exchange::Exchange;
+use idemio::exchange::Attachments;
 use idemio::handler::{
     HandlerError, HandlerId, HandlerRegistry, LabeledHandler, TerminationHandler,
 };
 use idemio::router::{
-    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyParser, RouteMatcher,
+    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyMatcher, RouteKeyParser,
     Router, ServiceBuilder, SingleServiceConfigBuilder,
 };
+use idemio::Handler;
 use lambda_http::aws_lambda_events::apigw::{ApiGatewayProxyRequest, ApiGatewayProxyResponse};
 use lambda_http::{lambda_runtime, service_fn, Body, Error, LambdaEvent};
 use lambda_runtime::tracing::init_default_subscriber;
 use std::sync::Arc;
-struct LambdaRouteParser;
 
+struct LambdaRouteParser;
 impl RouteKeyParser<ApiGatewayProxyRequest> for LambdaRouteParser {
     fn as_route_key<'a>(&self, request: &'a ApiGatewayProxyRequest) -> RouteKey<'a> {
-        let path = match request.path.as_ref() {
-            None => None,
-            Some(val) => Some(val.as_str()),
-        };
+        let path = request.path.as_ref().map(|val| val.as_str());
         let method = Some(request.http_method.as_str());
         RouteKey { path, method }
     }
@@ -31,22 +29,19 @@ type AwsLambdaRouter = Router<
     HttpPathMethodMatcher<ApiGatewayProxyRequest, ApiGatewayProxyResponse>,
 >;
 
-struct TestLambdaHandler;
+#[derive(Handler)]
+struct LambdaEchoHandler;
 
-impl LabeledHandler for TestLambdaHandler {
-    fn id(&self) -> &'static str {
-        "TestLambdaHandler"
-    }
-}
 
 #[async_trait]
-impl TerminationHandler<ApiGatewayProxyRequest, ApiGatewayProxyResponse> for TestLambdaHandler {
+impl TerminationHandler<ApiGatewayProxyRequest, ApiGatewayProxyResponse> for LambdaEchoHandler {
     async fn exec(
         &self,
-        mut exchange: Exchange<ApiGatewayProxyRequest>,
+        _attachments: &mut Attachments,
+        exchange: ApiGatewayProxyRequest,
     ) -> Result<ApiGatewayProxyResponse, HandlerError> {
-        let input = exchange.take_data().expect("Could not take input data");
-        let body = input.body.unwrap_or("NoBody".to_string()) + " - TestLambdaHandler";
+        let input = exchange;
+        let body = input.body.unwrap_or("NoBody".to_string());
         let mut response = ApiGatewayProxyResponse::default();
         response.is_base64_encoded = input.is_base64_encoded;
         response.body = Some(Body::Text(body));
@@ -56,7 +51,7 @@ impl TerminationHandler<ApiGatewayProxyRequest, ApiGatewayProxyResponse> for Tes
 
 fn create_router() -> AwsLambdaRouter {
     let mut handler_registry = HandlerRegistry::new();
-    let handler = TestLambdaHandler;
+    let handler = LambdaEchoHandler;
     handler_registry
         .register_termination_handler(HandlerId::new("TestLambdaHandler"), handler)
         .unwrap();
@@ -68,8 +63,7 @@ fn create_router() -> AwsLambdaRouter {
         .end_route()
         .build();
     let matcher = HttpPathMethodMatcher::new(&router_config, &handler_registry).unwrap();
-    let parser = LambdaRouteParser;
-    Router::new(parser, matcher)
+    Router::new(LambdaRouteParser, matcher)
 }
 
 async fn entry(

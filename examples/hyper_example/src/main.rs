@@ -1,8 +1,10 @@
+mod modify;
+
 use async_trait::async_trait;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
-use hyper::http::{request, response};
+use hyper::http::response;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Request, Response, StatusCode};
@@ -10,40 +12,22 @@ use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use idemio::config::{Config, HandlerConfig, ProgrammaticConfigProvider};
-use idemio::exchange::Exchange;
+use idemio::config::{Config, ProgrammaticConfigProvider};
+use idemio::exchange::{Attachments, Exchange};
 use idemio::handler::{
     HandlerError, HandlerFlow, HandlerId, HandlerRegistry, HandlerResponse, LabeledHandler,
     MiddlewareHandler, TerminationHandler,
 };
 use idemio::router::{
-    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyParser, RouteMatcher,
+    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyMatcher, RouteKeyParser,
     Router, RouterError, ServiceBuilder, SingleServiceConfigBuilder,
 };
+use idemio::Handler;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 type HyperRequest = Request<BoxBody<Bytes, std::io::Error>>;
 type HyperResponse = Response<BoxBody<Bytes, std::io::Error>>;
-
-fn request_into_parts(
-    exchange: &mut Exchange<HyperRequest>,
-) -> (request::Parts, BoxBody<Bytes, std::io::Error>) {
-    exchange
-        .take_data()
-        .expect("Could not take request data")
-        .into_parts()
-}
-
-fn response_into_parts(
-    exchange: &mut Exchange<HyperResponse>,
-) -> (response::Parts, BoxBody<Bytes, std::io::Error>) {
-    exchange
-        .take_data()
-        .expect("Could not take response data")
-        .into_parts()
-}
-
 async fn collect_body(body: BoxBody<Bytes, std::io::Error>) -> Bytes {
     body.collect()
         .await
@@ -65,17 +49,8 @@ type HyperRouter = idemio::router::Router<
     HttpPathMethodMatcher<HyperRequest, HyperResponse>,
 >;
 
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-struct IdempotentLoggingHandlerConfig;
-
-#[derive(Debug)]
+#[derive(Debug, Handler)]
 struct IdempotentLoggingHandler;
-impl LabeledHandler for IdempotentLoggingHandler {
-    fn id(&self) -> &'static str {
-        "IdempotentLoggingHandler"
-    }
-}
-
 #[async_trait]
 impl<T> MiddlewareHandler<T> for IdempotentLoggingHandler
 where
@@ -92,27 +67,22 @@ struct GreetingHandlerConfig {
     response_text: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Handler)]
 struct GreetingHandler {
-    config: HandlerConfig<GreetingHandlerConfig>,
-}
-
-impl LabeledHandler for GreetingHandler {
-    fn id(&self) -> &'static str {
-        "GreetingHandler"
-    }
+    config: Config<GreetingHandlerConfig>,
 }
 
 #[async_trait]
 impl TerminationHandler<HyperRequest, HyperResponse> for GreetingHandler {
     async fn exec(
         &self,
-        mut exchange: Exchange<HyperRequest>,
+        _attachments: &mut Attachments,
+        exchange: HyperRequest,
     ) -> Result<HyperResponse, HandlerError> {
-        let (parts, body) = request_into_parts(&mut exchange);
+        let (parts, body) = exchange.into_parts();
         let input_bytes = collect_body(body).await;
         let input_str = String::from_utf8_lossy(&input_bytes).to_string();
-        let response_text = &self.config.config().get().response_text;
+        let response_text = &self.config.get().response_text;
         let response = if input_str.trim().is_empty() {
             response_text.clone()
         } else {
@@ -135,27 +105,22 @@ struct EchoHandlerConfig {
     reverse: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Handler)]
 struct EchoHandler {
-    config: HandlerConfig<EchoHandlerConfig>,
-}
-
-impl LabeledHandler for EchoHandler {
-    fn id(&self) -> &'static str {
-        "EchoHandler"
-    }
+    config: Config<EchoHandlerConfig>,
 }
 
 #[async_trait]
 impl TerminationHandler<HyperRequest, HyperResponse> for EchoHandler {
     async fn exec(
         &self,
-        mut exchange: Exchange<HyperRequest>,
+        _attachments: &mut Attachments,
+        request: HyperRequest,
     ) -> Result<HyperResponse, HandlerError> {
-        let (parts, body) = request_into_parts(&mut exchange);
+        let (parts, body) = request.into_parts();
         let input_bytes = collect_body(body).await;
         let input_str = String::from_utf8_lossy(&input_bytes).to_string();
-        let processed_input = if self.config.config().get().reverse {
+        let processed_input = if self.config.get().reverse {
             input_str.chars().rev().collect()
         } else {
             input_str
@@ -194,20 +159,15 @@ fn create_router() -> HyperRouter {
 
     // Register greeting handler
     let greeting_handler_id = HandlerId::new("greeting_handler");
-    let mut handler_config = HandlerConfig::builder();
-    let inner_config = Config::new(ProgrammaticConfigProvider {
+    let config = Config::new(ProgrammaticConfigProvider {
         config: GreetingHandlerConfig {
             response_text: "Hello, World!".to_string(),
         },
     })
     .unwrap();
-    handler_config
-        .id(greeting_handler_id.to_string())
-        .handler_config(inner_config)
-        .enabled(true);
-    let handler_config: HandlerConfig<GreetingHandlerConfig> = handler_config.build();
+
     let handler = GreetingHandler {
-        config: handler_config,
+        config,
     };
     handler_registry
         .register_termination_handler(greeting_handler_id, handler)
@@ -215,18 +175,12 @@ fn create_router() -> HyperRouter {
 
     // Register echo handler
     let echo_handler_id = HandlerId::new("echo_handler");
-    let mut handler_config = HandlerConfig::builder();
-    let inner_config = Config::new(ProgrammaticConfigProvider {
+    let config = Config::new(ProgrammaticConfigProvider {
         config: EchoHandlerConfig { reverse: true },
     })
     .unwrap();
-    handler_config
-        .id(echo_handler_id.to_string())
-        .handler_config(inner_config)
-        .enabled(true);
-    let handler_config: HandlerConfig<EchoHandlerConfig> = handler_config.build();
     let handler = EchoHandler {
-        config: handler_config,
+        config,
     };
     handler_registry
         .register_termination_handler(echo_handler_id, handler)
@@ -234,16 +188,6 @@ fn create_router() -> HyperRouter {
 
     // Register idempotent logging handler
     let idempotent_logging_handler_id = HandlerId::new("idempotent_logging_handler");
-    let mut handler_config = HandlerConfig::builder();
-    let inner_config = Config::new(ProgrammaticConfigProvider {
-        config: IdempotentLoggingHandlerConfig {},
-    })
-    .unwrap();
-    handler_config
-        .id(idempotent_logging_handler_id.to_string())
-        .handler_config(inner_config)
-        .enabled(true);
-
     let handler = IdempotentLoggingHandler;
     handler_registry
         .register_request_handler(idempotent_logging_handler_id, handler)

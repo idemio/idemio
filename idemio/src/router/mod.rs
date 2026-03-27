@@ -6,11 +6,11 @@ pub use config::builder::{
     MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
     SingleServiceMethodBuilder, SingleServiceRouteBuilder,
 };
-pub use path::{LoadedChain, PathMatcherError, RouteMatcher};
+pub use path::{LoadedChain, PathMatcherError, RouteKeyMatcher};
 pub use route::{RouteKey, RouteKeyParser};
 
 #[cfg(feature = "http")]
-pub use path::http::{HeaderKey, HttpPathMethodKey, HttpPathMethodMatcher, HttpPathSegment};
+pub use path::http::{HttpPathMethodKey, HttpPathMethodMatcher, HttpPathSegment};
 
 use crate::exchange::Exchange;
 use crate::handler::{HandlerFlow, HandlerResponse, MiddlewareHandler};
@@ -19,28 +19,28 @@ use std::sync::Arc;
 use thiserror::Error;
 
 /// Routes requests to appropriate handlers and returning responses.
-pub struct Router<I, O, Parser, Matcher>
+pub struct Router<I, O, P, M>
 where
     Self: Send + Sync,
     I: Send + Sync,
     O: Send + Sync,
-    Parser: RouteKeyParser<I>,
-    Matcher: RouteMatcher<I, O> + Send + Sync,
+    P: RouteKeyParser<I>,
+    M: RouteKeyMatcher<I, O> + Send + Sync,
 {
     pub _phantom: PhantomData<(I, O)>,
-    pub matcher: Matcher,
-    pub parser: Parser,
+    pub matcher: M,
+    pub parser: P,
 }
 
-impl<I, O, Parser, Matcher> Router<I, O, Parser, Matcher>
+impl<I, O, P, M> Router<I, O, P, M>
 where
     Self: Send + Sync,
     I: Send + Sync,
     O: Send + Sync,
-    Parser: RouteKeyParser<I> + Send + Sync,
-    Matcher: RouteMatcher<I, O> + Send + Sync,
+    P: RouteKeyParser<I> + Send + Sync,
+    M: RouteKeyMatcher<I, O> + Send + Sync,
 {
-    pub fn new(parser: Parser, matcher: Matcher) -> Self {
+    pub fn new(parser: P, matcher: M) -> Self {
         Self {
             _phantom: PhantomData,
             parser,
@@ -53,7 +53,9 @@ where
         let handler_chain = self
             .matcher
             .lookup(route_key)
-            .ok_or_else(|| todo!("Handle missing route error"))?;
+            .ok_or_else(|| {
+                todo!()
+            })?;
         let result = self.execute_handlers(handler_chain, request).await?;
 
         Ok(result)
@@ -104,12 +106,13 @@ where
         }
 
         // Execute the Termination Handler
+        let (uuid, mut attachments, data) = request_exchange.take_data();
         let mut response_exchange = match executables
             .termination_handler()
-            .exec(request_exchange)
+            .exec(&mut attachments, data)
             .await
         {
-            Ok(output) => Exchange::new(output),
+            Ok(output) => Exchange::from((uuid, attachments, output)),
             Err(error) => todo!("Convert error '{error}' into generic O."),
         };
         let response_handlers = executables.response_handlers();
@@ -127,18 +130,7 @@ where
                 Err(error) => todo!("Convert error '{error}' into generic O."),
             }
         }
-        response_exchange
-            .take_data()
-            .map_err(|e| todo!("Handle read error on response"))
-    }
-
-    async fn return_output<T>(exchange: &mut Exchange<T>) -> Result<T, RouterError>
-    where
-        T: Send + Sync,
-    {
-        exchange
-            .take_data()
-            .map_err(|_| RouterError::MissingResponseError)
+        Ok(response_exchange.take_data().2)
     }
 }
 

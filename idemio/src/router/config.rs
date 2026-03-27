@@ -154,7 +154,7 @@ impl Display for Routes {
 ///
 /// This structure defines the complete handler execution pipeline for a route,
 /// including request processing, termination, and response processing phases.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PathChain {
     /// Handlers executed during the request processing phase.
     ///
@@ -210,13 +210,6 @@ impl PathChain {
             .get_or_insert_with(Vec::new)
             .push(handler.into());
         self
-    }
-}
-
-impl Default for PathChain {
-    /// Create a default empty path chain
-    fn default() -> Self {
-        Self::new()
     }
 }
 

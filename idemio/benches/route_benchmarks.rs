@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, Criterion};
-use idemio::exchange::Exchange;
+use idemio::exchange::{Attachments, Exchange};
 use idemio::handler::{
     HandlerError, HandlerFlow, HandlerId, HandlerRegistry, HandlerResponse, LabeledHandler,
     MiddlewareHandler, TerminationHandler,
 };
-use idemio::router::{HttpPathMethodMatcher, RouteKey, RouteMatcher};
+use idemio::router::{HttpPathMethodMatcher, RouteKey, RouteKeyMatcher};
 use idemio::router::{MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder};
 use std::hint::black_box;
 #[derive(Debug)]
@@ -32,7 +32,7 @@ impl LabeledHandler for DummyTerminationHandler {
 
 #[async_trait]
 impl TerminationHandler<(), ()> for DummyTerminationHandler {
-    async fn exec(&self, _exchange: Exchange<()>) -> Result<(), HandlerError> {
+    async fn exec(&self, _attachments: &mut Attachments, _exchange: ()) -> Result<(), HandlerError> {
         Ok(())
     }
 }

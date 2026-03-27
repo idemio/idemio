@@ -1,12 +1,13 @@
 use crate::handler::HandlerRegistry;
 use crate::router::config::{RouterConfig, Routes};
+use crate::router::path::{LoadedChain, PathMatcherError, RouteKeyMatcher};
 use crate::router::route::RouteKey;
-use crate::router::path::{LoadedChain, RouteMatcher, PathMatcherError};
-use fnv::{FnvBuildHasher, FnvHasher};
+use fnv::FnvBuildHasher;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::iter::Filter;
 use std::str::{FromStr, Split};
 use std::sync::Arc;
@@ -16,45 +17,17 @@ fn split_path(path: &'_ str) -> Filter<Split<'_, char>, fn(&&str) -> bool> {
     path.split('/').filter(|s| !s.is_empty())
 }
 
-/// A key used for fast lookup of static paths (paths without wildcards) in the router.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct StaticPathMethodKey {
-    /// Hash of the HTTP method string (e.g., "GET", "POST")
-    method_hash: u64,
-    /// Hash of the URL path string (e.g., "/api/users")
-    path_hash: u64,
-}
-
-impl StaticPathMethodKey {
-    /// Creates a new StaticPathKey from method and path strings.
-    pub fn new(method: impl AsRef<str>, path: impl AsRef<str>) -> Self {
-        let path_hash = Self::hash_part(path);
-        let method_hash = Self::hash_part(method);
-        Self {
-            method_hash,
-            path_hash,
-        }
-    }
-
-    fn hash_part(in_string: impl AsRef<str>) -> u64 {
-        let str = in_string.as_ref();
-        let mut hasher = FnvHasher::default();
-        str.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
 /// Represents a segment in a URL path, which can be either a static text or a wildcard.
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
-pub enum HttpPathSegment {
+pub enum HttpPathSegment<'a> {
     /// A static path segment containing literal text that must match exactly.
-    Static(String),
+    Static(Cow<'a, str>),
 
     /// A wildcard segment that matches any single path segment value.
     Any,
 }
 
-impl Display for HttpPathSegment {
+impl Display for HttpPathSegment<'_> {
     /// Formats the path segment for display purposes.
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -64,7 +37,17 @@ impl Display for HttpPathSegment {
     }
 }
 
-impl FromStr for HttpPathSegment {
+impl<'a> From<&'a str> for HttpPathSegment<'a> {
+    fn from(s: &'a str) -> Self {
+        if s == "*" {
+            HttpPathSegment::Any
+        } else {
+            HttpPathSegment::Static(Cow::Borrowed(s))
+        }
+    }
+}
+
+impl FromStr for HttpPathSegment<'_> {
     type Err = Infallible;
 
     /// Parses a string into a PathSegment.
@@ -72,7 +55,7 @@ impl FromStr for HttpPathSegment {
         if s == "*" {
             Ok(HttpPathSegment::Any)
         } else {
-            Ok(HttpPathSegment::Static(s.to_string()))
+            Ok(HttpPathSegment::Static(Cow::Owned(s.to_string())))
         }
     }
 }
@@ -84,7 +67,7 @@ where
     O: Send + Sync,
 {
     /// Child nodes indexed by path segment (static text or wildcard)
-    children: HashMap<HttpPathSegment, HttpPathMethodNode<I, O>, FnvBuildHasher>,
+    children: HashMap<HttpPathSegment<'static>, HttpPathMethodNode<I, O>, FnvBuildHasher>,
     /// HTTP method handlers available at this path depth
     methods: HashMap<String, Arc<LoadedChain<I, O>>, FnvBuildHasher>,
 }
@@ -94,7 +77,6 @@ where
     I: Send + Sync,
     O: Send + Sync,
 {
-    /// Creates a new empty PathNode with default FNV-hashed collections.
     fn default() -> Self {
         Self {
             children: HashMap::with_hasher(FnvBuildHasher::default()),
@@ -103,39 +85,47 @@ where
     }
 }
 
-pub struct HeaderKey<'a> {
-    pub header: &'a str,
-}
-
-impl<'a> HeaderKey<'a> {
-    pub fn new(header: &'a str) -> Self {
-        Self { header }
-    }
-}
-
+#[derive(Default, Hash)]
 pub struct HttpPathMethodKey<'a> {
-    pub method: &'a str,
     pub path: &'a str,
+    pub method: &'a str,
 }
 
 impl<'a> HttpPathMethodKey<'a> {
     pub fn new(method: &'a str, path: &'a str) -> Self {
         Self { method, path }
     }
+
+    #[inline]
+    pub fn with_method(mut self, method: &'a str) -> Self {
+        self.method = method;
+        self
+    }
+
+    #[inline]
+    pub fn with_path(mut self, path: &'a str) -> Self {
+        self.path = path;
+        self
+    }
 }
+
+impl<'a> From<(&'a str, &'a str)> for HttpPathMethodKey<'a> {
+    fn from(value: (&'a str, &'a str)) -> Self {
+        HttpPathMethodKey {path: value.0, method: value.1}
+    }
+}
+
 
 pub struct HttpPathMethodMatcher<I, O>
 where
     I: Send + Sync,
     O: Send + Sync,
 {
-    /// Fast hash-based lookup for static paths (no wildcards)
-    static_paths: HashMap<StaticPathMethodKey, Arc<LoadedChain<I, O>>, FnvBuildHasher>,
     /// Tree structure for dynamic-path matching with wildcards
     nodes: HttpPathMethodNode<I, O>,
 }
 
-impl<I, O> RouteMatcher<I, O> for HttpPathMethodMatcher<I, O>
+impl<I, O> RouteKeyMatcher<I, O> for HttpPathMethodMatcher<I, O>
 where
     I: Send + Sync,
     O: Send + Sync,
@@ -153,16 +143,6 @@ where
                 );
                 for (index, (path, methods)) in paths.iter().enumerate() {
                     log::debug!("Path {index}: '{path}'");
-                    if !path.contains('*') {
-                        for (method, path_chain) in methods {
-                            log::trace!("Adding static route: {path}@{method}");
-                            let key = StaticPathMethodKey::new(method, path);
-                            let loaded_chain = Self::load_handlers(handler_registry, path_chain)?;
-                            self.static_paths.insert(key, Arc::new(loaded_chain));
-                        }
-                    } else {
-                        log::trace!("'{path}' contains wildcards, adding dynamic routing tree");
-                    }
                     let path_segments = split_path(path);
                     let mut current_node = &mut self.nodes;
                     for segment in path_segments {
@@ -201,39 +181,31 @@ where
             (Some(path), Some(method)) => (path, method),
             _ => return None,
         };
-        // Try the exact static match first
-        if let Some(handlers) = self
-            .static_paths
-            .get(&StaticPathMethodKey::new(&method, &path))
-        {
-            return Some(handlers.clone());
-        }
 
         // Dynamic path matching with wildcards
         let segments = split_path(&path);
         let mut best: Option<&HttpPathMethodNode<I, O>> = None;
         let mut current = &self.nodes;
-
         for segment_str in segments {
-            if let Some(wildcard_node) = current.children.get(&HttpPathSegment::Any) {
-                if wildcard_node.methods.contains_key(method) {
-                    best = Some(wildcard_node);
-                }
-            }
+            current
+                .children
+                .get(&HttpPathSegment::Any)
+                .and_then(|node| match node.methods.contains_key(method) {
+                    true => Some(node),
+                    false => None,
+                })
+                .and_then(|node| best.replace(node));
 
-            let static_segment = HttpPathSegment::Static(segment_str.to_string());
+            let static_segment = HttpPathSegment::Static(Cow::Borrowed(segment_str));
             current = match current.children.get(&static_segment) {
                 Some(child) => child,
-                None => break, // No exact match, stop traversal
+                None => break,
             };
         }
-
-        // Check the final node for an exact match
-        if current.methods.contains_key(method) {
-            best = Some(current);
-        }
-
-        // Return the best match found
+        current
+            .methods
+            .contains_key(method)
+            .then(|| best.replace(current));
         best.and_then(|node| node.methods.get(method).cloned())
     }
 
@@ -243,7 +215,6 @@ where
     ) -> Result<Self, PathMatcherError> {
         let mut matcher = Self {
             nodes: HttpPathMethodNode::default(),
-            static_paths: HashMap::with_hasher(FnvBuildHasher::default()),
         };
         if let Err(e) = matcher.parse_config(config, handler_registry) {
             return Err(e);
@@ -254,107 +225,349 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::exchange::{Exchange};
-    use crate::handler::{MiddlewareHandler, HandlerError, HandlerFlow, HandlerResponse, LabeledHandler};
+    use crate::exchange::Attachments;
+    use crate::handler::{HandlerError, LabeledHandler, TerminationHandler};
     use crate::router::config::builder::{
         MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
     };
+    use crate::router::path::{http::HttpPathMethodMatcher, RouteKeyMatcher};
     use crate::router::route::RouteKey;
-    use crate::router::path::{http::HttpPathMethodMatcher, RouteMatcher};
     use async_trait::async_trait;
-    use std::convert::Infallible;
+    use idemio_macro::Handler;
+    use crate::router::HttpPathMethodKey;
 
     /// A simple test handler that does nothing but return an OK status.
-    #[derive(Debug)]
+    #[derive(Handler)]
     struct DummyHandler;
-
-    impl LabeledHandler for DummyHandler {
-        fn id(&self) -> &'static str {
-            "DummyHandler"
-        }
-    }
-
     #[async_trait]
-    impl MiddlewareHandler<()> for DummyHandler {
+    impl TerminationHandler<(), ()> for DummyHandler {
         async fn exec(
             &self,
-            _exchange: &mut Exchange<()>,
-        ) -> HandlerResponse {
-            HandlerFlow::ok()
+            _attachments: &mut Attachments,
+            _exchange: (),
+        ) -> Result<(), HandlerError> {
+            Ok(())
         }
     }
 
-//    /// Comprehensive test of PathMatcher functionality including static and dynamic routing.
-//    #[test]
-//    #[rustfmt::skip]
-//    fn router_v2_test() {
-//        // Set up a handler registry with test handlers
-//        let mut registry = HandlerRegistry::<(), ()>::new();
-//        registry
-//            .register_handler(HandlerId::new("test1"), DummyHandler)
-//            .unwrap();
-//        registry
-//            .register_handler(HandlerId::new("test2"), DummyHandler)
-//            .unwrap();
-//        registry
-//            .register_handler(HandlerId::new("test3"), DummyHandler)
-//            .unwrap();
-//        registry
-//            .register_handler(HandlerId::new("test4"), DummyHandler)
-//            .unwrap();
-//        registry
-//            .register_handler(HandlerId::new("test6"), DummyHandler)
-//            .unwrap();
-//        registry
-//            .register_handler(HandlerId::new("test7"), DummyHandler)
-//            .unwrap();
-//        registry
-//            .register_handler(HandlerId::new("test8"), DummyHandler)
-//            .unwrap();
-//        registry
-//            .register_handler(HandlerId::new("test9"), DummyHandler)
-//            .unwrap();
-//
-//        // Build router configuration with wildcard path and handler chains
-//        let config = SingleServiceConfigBuilder::new()
-//            .chain("test_chain", &["test1", "test2", "test6", "test7", "test8", "test9"])
-//            .route("/api/v1/*")
-//                .post()
-//                    .request_chain("test_chain")
-//                    .termination_handler("test3")
-//                    .response_handler("test4")
-//                .end_method()
-//                .get()
-//                    .request_chain("test_chain")
-//                    .termination_handler("test3")
-//                    .response_handler("test4")
-//                .end_method()
-//            .end_route()
-//            .build();
-//
-//        // Create PathMatcher with the configuration
-//        let table = HttpPathMethodMatcher::new(&config, &registry).unwrap();
-//
-//        // Test wildcard matching - should match the "/api/v1/*" pattern
-//        let result = table.lookup(RouteInfo::new("/api/v1/users", "GET"));
-//        assert!(result.is_some());
-//        let handlers = result.unwrap();
-//        assert_eq!(handlers.request_handlers.len(), 6); // test_chain has 6 handlers
-//
-//        // Test another wildcard match with a different path segment
-//        let result = table.lookup(RouteInfo::new("/api/v1/someOtherEndpoint", "GET"));
-//        assert!(result.is_some());
-//        let handlers = result.unwrap();
-//        assert_eq!(handlers.request_handlers.len(), 6);
-//
-//        // Test non-matching path - should return None
-//        let result = table.lookup(RouteInfo::new("/invalid", "GET"));
-//        assert!(result.is_none());
-//
-//        // Test path that goes beyond wildcard - should still match "/api/v1/*"
-//        let result = table.lookup(RouteInfo::new("/api/v1/users/somethingElse", "GET"));
-//        assert!(result.is_some());
-//        let handlers = result.unwrap();
-//        assert_eq!(handlers.request_handlers.len(), 6);
-//    }
+    #[test]
+    fn test_lookup_static_path() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = ("/api/users", "GET").into();
+        let result = matcher.lookup(key);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_lookup_wildcard_path() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/v1/*")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = ("/api/v1/users", "GET").into();
+        let result = matcher.lookup(key);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_lookup_wildcard_with_multiple_segments() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/v1/*")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = ("/api/v1/users/123/profile", "GET").into();
+        let result = matcher.lookup(key);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_lookup_no_matching_path() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = RouteKey::new("/api/invalid", "GET");
+        let result = matcher.lookup(key);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_lookup_no_matching_method() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = RouteKey::new("/api/users", "POST");
+        let result = matcher.lookup(key);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_lookup_missing_path() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = RouteKey::default().with_method("GET");
+        let result = matcher.lookup(key);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_lookup_missing_method() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = RouteKey::default().with_path("/api/users");
+        let result = matcher.lookup(key);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_lookup_multiple_methods_same_path() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+        registry
+            .register_termination_handler("handler2".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .post()
+            .termination_handler("handler2")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let get_key = RouteKey::default()
+            .with_path("/api/users")
+            .with_method("GET");
+        let get_result = matcher.lookup(get_key);
+        assert!(get_result.is_some());
+
+        let post_key = RouteKey::default()
+            .with_path("/api/users")
+            .with_method("POST");
+        let post_result = matcher.lookup(post_key);
+        assert!(post_result.is_some());
+
+        let put_key = RouteKey::default()
+            .with_path("/api/users")
+            .with_method("PUT");
+        let put_result = matcher.lookup(put_key);
+        assert!(put_result.is_none());
+    }
+
+    #[test]
+    fn test_lookup_nested_static_paths() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+        registry
+            .register_termination_handler("handler2".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .route("/api/users/profile")
+            .get()
+            .termination_handler("handler2")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key1 = RouteKey::default()
+            .with_path("/api/users")
+            .with_method("GET");
+        let result1 = matcher.lookup(key1);
+        assert!(result1.is_some());
+
+        let key2 = RouteKey::default()
+            .with_path("/api/users/profile")
+            .with_method("GET");
+        let result2 = matcher.lookup(key2);
+        assert!(result2.is_some());
+    }
+
+    #[test]
+    fn test_lookup_wildcard_precedence() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+        registry
+            .register_termination_handler("handler2".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/*")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .route("/api/users/profile")
+            .get()
+            .termination_handler("handler2")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        // More specific path should match
+        let key = RouteKey::default()
+            .with_path("/api/users/profile")
+            .with_method("GET");
+        let result = matcher.lookup(key);
+        assert!(result.is_some());
+
+        // Wildcard should still match partial paths
+        let key2 = RouteKey::default()
+            .with_path("/api/other")
+            .with_method("GET");
+        let result2 = matcher.lookup(key2);
+        assert!(result2.is_some());
+    }
+
+    #[test]
+    fn test_lookup_root_path() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        let key = RouteKey::default().with_path("/").with_method("GET");
+        let result = matcher.lookup(key);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_lookup_trailing_slash() {
+        let mut registry = crate::handler::HandlerRegistry::<(), ()>::new();
+        registry
+            .register_termination_handler("handler1".into(), DummyHandler)
+            .unwrap();
+
+        let config = SingleServiceConfigBuilder::new()
+            .route("/api/users")
+            .get()
+            .termination_handler("handler1")
+            .end_method()
+            .end_route()
+            .build();
+
+        let matcher = HttpPathMethodMatcher::new(&config, &registry).unwrap();
+
+        // Path with trailing slash should match (due to split_path filtering empty segments)
+        let key = RouteKey::default()
+            .with_path("/api/users/")
+            .with_method("GET");
+        let result = matcher.lookup(key);
+        assert!(result.is_some());
+    }
 }
