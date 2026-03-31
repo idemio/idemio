@@ -1,12 +1,12 @@
 use async_trait::async_trait;
-use idemio::exchange::Attachments;
+use idemio::exchange::InnerData;
 use idemio::handler::{
     HandlerError, HandlerId, HandlerRegistry, LabeledHandler, TerminationHandler,
 };
-use idemio::router::{
-    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyMatcher, RouteKeyParser,
-    Router, ServiceBuilder, SingleServiceConfigBuilder,
+use idemio::router::builder::{
+    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
+use idemio::router::{HttpPathMethodMatcher, RouteKey, RouteKeyMatcher, RouteKeyParser, Router};
 use idemio::Handler;
 use lambda_http::aws_lambda_events::apigw::{ApiGatewayProxyRequest, ApiGatewayProxyResponse};
 use lambda_http::{lambda_runtime, service_fn, Body, Error, LambdaEvent};
@@ -32,20 +32,21 @@ type AwsLambdaRouter = Router<
 #[derive(Handler)]
 struct LambdaEchoHandler;
 
-
 #[async_trait]
 impl TerminationHandler<ApiGatewayProxyRequest, ApiGatewayProxyResponse> for LambdaEchoHandler {
     async fn exec(
         &self,
-        _attachments: &mut Attachments,
-        exchange: ApiGatewayProxyRequest,
-    ) -> Result<ApiGatewayProxyResponse, HandlerError> {
-        let input = exchange;
+        data: InnerData<ApiGatewayProxyRequest>,
+    ) -> Result<InnerData<ApiGatewayProxyResponse>, HandlerError> {
+        let input = data.data;
+        let attachments = data.attachments;
+
         let body = input.body.unwrap_or("NoBody".to_string());
         let mut response = ApiGatewayProxyResponse::default();
         response.is_base64_encoded = input.is_base64_encoded;
         response.body = Some(Body::Text(body));
-        Ok(response)
+
+        Ok(InnerData::new(response))
     }
 }
 
@@ -53,7 +54,7 @@ fn create_router() -> AwsLambdaRouter {
     let mut handler_registry = HandlerRegistry::new();
     let handler = LambdaEchoHandler;
     handler_registry
-        .register_termination_handler(HandlerId::new("TestLambdaHandler"), handler)
+        .register_termination_handler(HandlerId::new(LambdaEchoHandler::id()), handler)
         .unwrap();
     let router_config = SingleServiceConfigBuilder::new()
         .route("/test")
@@ -75,7 +76,7 @@ async fn entry(
         Ok(response) => Ok(response),
         Err(e) => {
             let mut response = ApiGatewayProxyResponse::default();
-            response.body = Some(Body::Text(format!("Error: {}", e)));
+            response.body = Some(Body::Text(format!("{}", e)));
             Ok(response)
         }
     }

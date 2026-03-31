@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use crate::handler::{MiddlewareHandler, TerminationHandler};
-use crate::handler::HandlerId;
+use crate::handler::{HandlerId};
 use dashmap::{DashMap, Entry};
 use std::sync::Arc;
 use thiserror::Error;
@@ -169,7 +169,7 @@ where
 mod tests {
     use super::*;
     use crate::exchange::{Exchange};
-    use crate::handler::{HandlerFlow, HandlerResponse, LabeledHandler};
+    use crate::handler::{MiddlewareResponse, MiddlewareResult, LabeledHandler};
     use async_trait::async_trait;
     use idemio_macro::Handler;
 
@@ -190,8 +190,8 @@ mod tests {
         async fn exec(
             &self,
             _exchange: &mut Exchange<String>,
-        ) -> HandlerResponse {
-            HandlerFlow::ok()
+        ) -> MiddlewareResult {
+            MiddlewareResponse::ok()
         }
     }
 
@@ -202,30 +202,30 @@ mod tests {
         async fn exec(
             &self,
             _exchange: &mut Exchange<String>,
-        ) -> HandlerResponse {
-            HandlerFlow::ok()
+        ) -> MiddlewareResult {
+            MiddlewareResponse::ok()
         }
     }
 
-//    #[test]
-//    fn test_register_multiple_handlers_success() {
-//        let mut registry = HandlerRegistry::<String, String>::new();
-//
-//        let handler1_id = HandlerId::new("handler_1");
-//        let handler1 = TestHandler::new("handler_1");
-//
-//        let handler2_id = HandlerId::new("handler_2");
-//        let handler2 = AnotherTestHandler;
-//
-//        let result1 = registry.register_handler(handler1_id.clone(), handler1);
-//        let result2 = registry.register_handler(handler2_id.clone(), handler2);
-//
-//        assert!(result1.is_ok());
-//        assert!(result2.is_ok());
-//        assert_eq!(registry.handlers.len(), 2);
-//        assert!(registry.handlers.contains_key(&handler1_id));
-//        assert!(registry.handlers.contains_key(&handler2_id));
-//    }
+    #[test]
+    fn test_register_multiple_handlers_success() {
+        let mut registry = HandlerRegistry::<String, String>::new();
+
+        let handler1_id = HandlerId::new("handler_1");
+        let handler1 = TestHandler::new("handler_1");
+
+        let handler2_id = HandlerId::new("handler_2");
+        let handler2 = AnotherTestHandler;
+
+        let result1 = registry.register_request_handler(handler1_id.clone(), handler1);
+        let result2 = registry.register_request_handler(handler2_id.clone(), handler2);
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        assert_eq!(registry.request_handlers.len(), 2);
+        assert!(registry.request_handlers.contains_key(&handler1_id));
+        assert!(registry.request_handlers.contains_key(&handler2_id));
+    }
 
     #[test]
     fn test_register_handler_with_conflicting_id() {
@@ -247,57 +247,47 @@ mod tests {
         assert_eq!(registry.request_handlers.len(), 1);
     }
 
-//    #[test]
-//    fn test_find_nonexistent_handler() {
-//        let registry = HandlerRegistry::<String, String>::new();
-//        let nonexistent_id = HandlerId::new("nonexistent_handler");
-//
-//        let result: Result<Arc<dyn Handler<String, String>>, _> = registry.find_with_id(&nonexistent_id);
-//
-//        assert!(result.is_err());
-//    }
+    #[test]
+    fn test_find_nonexistent_handler() {
+        let registry = HandlerRegistry::<String, String>::new();
+        let nonexistent_id = HandlerId::new("nonexistent_handler");
+        let result: Result<Arc<dyn MiddlewareHandler<String>>, _> = registry.get_request_handler(&nonexistent_id);
+        assert!(result.is_err());
+    }
 
-//    #[test]
-//    fn test_find_handler_after_multiple_registrations() {
-//        let mut registry = HandlerRegistry::<String, String>::new();
-//
-//        let handler1_id = HandlerId::new("handler_alpha");
-//        let handler1 = TestHandler::new("handler_alpha");
-//
-//        let handler2_id = HandlerId::new("handler_beta");
-//        let handler2 = TestHandler::new("handler_beta");
-//
-//        let handler3_id = HandlerId::new("handler_gamma");
-//        let handler3 = AnotherTestHandler;
-//
-//        registry
-//            .register_request_handler(handler1_id.clone(), handler1)
-//            .unwrap();
-//        registry
-//            .register_request_handler(handler2_id.clone(), handler2)
-//            .unwrap();
-//        registry
-//            .register_request_handler(handler3_id.clone(), handler3)
-//            .unwrap();
-//
-//        // Find the middle handler
-//        let result = registry.find_with_id(&handler2_id);
-//        assert!(result.is_ok());
-//
-//        // Find the last handler
-//        let result = registry.find_with_id(&handler3_id);
-//        assert!(result.is_ok());
-//
-//        // Find the first handler
-//        let result = registry.find_with_id(&handler1_id);
-//        assert!(result.is_ok());
-//    }
+    #[test]
+    fn test_find_handler_after_multiple_registrations() {
+        let mut registry = HandlerRegistry::<String, String>::new();
 
-//    #[test]
-//    fn test_empty_registry_operations() {
-//        let registry = HandlerRegistry::<(), ()>::new();
-//        let some_id = HandlerId::new("any_id");
-//        let result = registry.find_with_id(&some_id);
-//        assert!(result.is_err());
-//    }
+        let handler1_id = HandlerId::new("handler_alpha");
+        let handler1 = TestHandler::new("handler_alpha");
+
+        let handler2_id = HandlerId::new("handler_beta");
+        let handler2 = TestHandler::new("handler_beta");
+
+        let handler3_id = HandlerId::new("handler_gamma");
+        let handler3 = AnotherTestHandler;
+
+        registry
+            .register_request_handler(handler1_id.clone(), handler1)
+            .unwrap();
+        registry
+            .register_request_handler(handler2_id.clone(), handler2)
+            .unwrap();
+        registry
+            .register_request_handler(handler3_id.clone(), handler3)
+            .unwrap();
+
+        // Find the middle handler
+        let result = registry.get_request_handler(&handler2_id);
+        assert!(result.is_ok());
+
+        // Find the last handler
+        let result = registry.get_request_handler(&handler3_id);
+        assert!(result.is_ok());
+
+        // Find the first handler
+        let result = registry.get_request_handler(&handler1_id);
+        assert!(result.is_ok());
+    }
 }

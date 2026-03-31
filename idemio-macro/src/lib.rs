@@ -72,8 +72,13 @@ pub fn derive_init_function(input: TokenStream) -> TokenStream {
 //    };
     let generated = quote! {
         impl LabeledHandler for #struct_name {
-            fn id(&self) -> &'static str {
+        }
+        impl #struct_name {
+            pub fn id() -> &'static str {
                 stringify!(#struct_name)
+            }
+            pub fn handler_id() -> HandlerId {
+                HandlerId::new(stringify!(#struct_name))
             }
         }
     };

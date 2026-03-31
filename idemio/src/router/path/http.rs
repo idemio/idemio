@@ -1,5 +1,5 @@
 use crate::handler::HandlerRegistry;
-use crate::router::config::{RouterConfig, Routes};
+use crate::router::config::{RouterConfig};
 use crate::router::path::{LoadedChain, PathMatcherError, RouteKeyMatcher};
 use crate::router::route::RouteKey;
 use fnv::FnvBuildHasher;
@@ -111,10 +111,12 @@ impl<'a> HttpPathMethodKey<'a> {
 
 impl<'a> From<(&'a str, &'a str)> for HttpPathMethodKey<'a> {
     fn from(value: (&'a str, &'a str)) -> Self {
-        HttpPathMethodKey {path: value.0, method: value.1}
+        HttpPathMethodKey {
+            path: value.0,
+            method: value.1,
+        }
     }
 }
-
 
 pub struct HttpPathMethodMatcher<I, O>
 where
@@ -135,45 +137,37 @@ where
         route_config: &RouterConfig,
         handler_registry: &HandlerRegistry<I, O>,
     ) -> Result<(), PathMatcherError> {
-        match &route_config.routes {
-            Routes::HttpRequestPaths(paths) => {
-                log::info!(
-                    "Starting router configuration parsing with '{}' paths",
-                    paths.len()
-                );
-                for (index, (path, methods)) in paths.iter().enumerate() {
-                    log::debug!("Path {index}: '{path}'");
-                    let path_segments = split_path(path);
-                    let mut current_node = &mut self.nodes;
-                    for segment in path_segments {
-                        let path_segment = HttpPathSegment::from_str(segment).unwrap();
-                        let is_wild_card = path_segment == HttpPathSegment::Any;
-                        current_node = current_node
-                            .children
-                            .entry(path_segment)
-                            .or_insert_with(HttpPathMethodNode::default);
+        log::info!(
+            "Starting router configuration parsing with '{}' paths",
+            route_config.paths.len()
+        );
+        for (index, (path, methods)) in route_config.paths.iter().enumerate() {
+            log::debug!("Path {index}: '{path}'");
+            let path_segments = split_path(path);
+            let mut current_node = &mut self.nodes;
+            for segment in path_segments {
+                let path_segment = HttpPathSegment::from_str(segment).unwrap();
+                let is_wild_card = path_segment == HttpPathSegment::Any;
+                current_node = current_node
+                    .children
+                    .entry(path_segment)
+                    .or_insert_with(HttpPathMethodNode::default);
 
-                        if is_wild_card {
-                            break;
-                        }
-                    }
-                    for (method, handlers) in methods {
-                        let chain = Self::load_handlers(&handler_registry, handlers)?;
-                        let count = chain.size();
-                        current_node
-                            .methods
-                            .insert(method.to_string(), Arc::new(chain));
-
-                        log::debug!("Added {count} handlers for method {method} to path '{path}'");
-                    }
+                if is_wild_card {
+                    break;
                 }
-                Ok(())
             }
-            invalid_route_config => Err(PathMatcherError::invalid_configuration(format!(
-                "Route config type should be HttpRequestPaths when using HttpPathMethodMatcher. '{}' is currently configured.",
-                invalid_route_config
-            ))),
+            for (method, handlers) in methods {
+                let chain = Self::load_handlers(&handler_registry, handlers)?;
+                let count = chain.size();
+                current_node
+                    .methods
+                    .insert(method.to_string(), Arc::new(chain));
+
+                log::debug!("Added {count} handlers for method {method} to path '{path}'");
+            }
         }
+        Ok(())
     }
 
     fn lookup(&self, key: RouteKey<'_>) -> Option<Arc<LoadedChain<I, O>>> {
@@ -225,28 +219,22 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::exchange::Attachments;
+    use crate::exchange::InnerData;
+    use crate::handler::HandlerId;
     use crate::handler::{HandlerError, LabeledHandler, TerminationHandler};
-    use crate::router::config::builder::{
-        MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
-    };
     use crate::router::path::{http::HttpPathMethodMatcher, RouteKeyMatcher};
     use crate::router::route::RouteKey;
     use async_trait::async_trait;
     use idemio_macro::Handler;
-    use crate::router::HttpPathMethodKey;
+    use crate::router::builder::{MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder};
 
     /// A simple test handler that does nothing but return an OK status.
     #[derive(Handler)]
     struct DummyHandler;
     #[async_trait]
     impl TerminationHandler<(), ()> for DummyHandler {
-        async fn exec(
-            &self,
-            _attachments: &mut Attachments,
-            _exchange: (),
-        ) -> Result<(), HandlerError> {
-            Ok(())
+        async fn exec(&self, _data: InnerData<()>) -> Result<InnerData<()>, HandlerError> {
+            Ok(InnerData::new(()))
         }
     }
 

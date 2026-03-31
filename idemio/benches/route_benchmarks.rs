@@ -1,39 +1,32 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, Criterion};
-use idemio::exchange::{Attachments, Exchange};
+use idemio::exchange::{Exchange, InnerData};
 use idemio::handler::{
-    HandlerError, HandlerFlow, HandlerId, HandlerRegistry, HandlerResponse, LabeledHandler,
+    HandlerError, MiddlewareResponse, HandlerId, HandlerRegistry, MiddlewareResult, LabeledHandler,
     MiddlewareHandler, TerminationHandler,
 };
 use idemio::router::{HttpPathMethodMatcher, RouteKey, RouteKeyMatcher};
-use idemio::router::{MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder};
+use idemio::router::builder::{MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder};
 use std::hint::black_box;
-#[derive(Debug)]
+use idemio::Attachments;
+use idemio_macro::Handler;
+
+#[derive(Debug, Handler)]
 struct DummyMiddlewareHandler;
-impl LabeledHandler for DummyMiddlewareHandler {
-    fn id(&self) -> &'static str {
-        "DummyHandler"
-    }
-}
 
 #[async_trait]
 impl MiddlewareHandler<()> for DummyMiddlewareHandler {
-    async fn exec(&self, _exchange: &mut Exchange<()>) -> HandlerResponse {
-        HandlerFlow::ok()
+    async fn exec(&self, _exchange: &mut Exchange<()>) -> MiddlewareResult {
+        MiddlewareResponse::ok()
     }
 }
-
+#[derive(Handler)]
 struct DummyTerminationHandler;
-impl LabeledHandler for DummyTerminationHandler {
-    fn id(&self) -> &'static str {
-        "DummyTerminationHandler"
-    }
-}
 
 #[async_trait]
 impl TerminationHandler<(), ()> for DummyTerminationHandler {
-    async fn exec(&self, _attachments: &mut Attachments, _exchange: ()) -> Result<(), HandlerError> {
-        Ok(())
+    async fn exec(&self, data: InnerData<()>) -> Result<InnerData<()>, HandlerError> {
+        Ok(InnerData::new(()))
     }
 }
 

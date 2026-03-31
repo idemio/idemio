@@ -1,11 +1,10 @@
 mod config;
 mod path;
 mod route;
+pub mod builder;
 
-pub use config::builder::{
-    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
-    SingleServiceMethodBuilder, SingleServiceRouteBuilder,
-};
+
+pub use config::{RouterConfig};
 pub use path::{LoadedChain, PathMatcherError, RouteKeyMatcher};
 pub use route::{RouteKey, RouteKeyParser};
 
@@ -13,7 +12,7 @@ pub use route::{RouteKey, RouteKeyParser};
 pub use path::http::{HttpPathMethodKey, HttpPathMethodMatcher, HttpPathSegment};
 
 use crate::exchange::Exchange;
-use crate::handler::{HandlerFlow, HandlerResponse, MiddlewareHandler};
+use crate::handler::{MiddlewareResponse, MiddlewareResult, MiddlewareHandler};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thiserror::Error;
@@ -66,14 +65,14 @@ where
     async fn execute_handler_chain<T>(
         handlers: &Vec<Arc<dyn MiddlewareHandler<T>>>,
         exchange: &mut Exchange<T>,
-    ) -> Option<HandlerResponse>
+    ) -> Option<MiddlewareResult>
     where
         T: Send + Sync,
     {
         for handler in handlers {
             match handler.exec(exchange).await {
                 Ok(flow) => {
-                    if let HandlerFlow::Break = flow {
+                    if let MiddlewareResponse::Break = flow {
                         return Some(Ok(flow));
                     }
                 }
@@ -97,7 +96,7 @@ where
         {
             match status {
                 Ok(flow) => {
-                    if let HandlerFlow::Break = flow {
+                    if let MiddlewareResponse::Break = flow {
                         todo!("Early return")
                     }
                 }
@@ -106,13 +105,13 @@ where
         }
 
         // Execute the Termination Handler
-        let (uuid, mut attachments, data) = request_exchange.take_data();
+        let (uuid, data) = request_exchange.take_data();
         let mut response_exchange = match executables
             .termination_handler()
-            .exec(&mut attachments, data)
+            .exec(data)
             .await
         {
-            Ok(output) => Exchange::from((uuid, attachments, output)),
+            Ok(output) => Exchange::from((uuid, output)),
             Err(error) => todo!("Convert error '{error}' into generic O."),
         };
         let response_handlers = executables.response_handlers();
@@ -123,14 +122,14 @@ where
         {
             match status {
                 Ok(flow) => {
-                    if let HandlerFlow::Break = flow {
+                    if let MiddlewareResponse::Break = flow {
                         todo!("Handle early exit on response handlers")
                     }
                 }
                 Err(error) => todo!("Convert error '{error}' into generic O."),
             }
         }
-        Ok(response_exchange.take_data().2)
+        Ok(response_exchange.take_data().1.data)
     }
 }
 

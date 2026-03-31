@@ -1,6 +1,5 @@
-use fnv::FnvHasher;
-use std::any::{Any, TypeId};
-use std::collections::HashMap;
+use crate::attachments::Attachments;
+use std::any::Any;
 use std::hash::{Hash, Hasher};
 use thiserror::Error;
 use uuid::Uuid;
@@ -11,69 +10,70 @@ where
     T: Send + Sync,
 {
     uuid: Uuid,
-    data: T,
+    inner: InnerData<T>,
     consume_listeners: Vec<Callback<T>>,
-    attachments: Attachments,
 }
 
-impl<T> From<(Uuid, Attachments, T)> for Exchange<T> 
-where
-    T: Send + Sync
-{
-    fn from(value: (Uuid, Attachments, T)) -> Self {
+pub struct InnerData<T> {
+    pub data: T,
+    pub attachments: Attachments
+}
+
+impl<T> InnerData<T> {
+    pub fn new(data: T) -> Self {
         Self {
-            uuid: value.0,
-            attachments: value.1,
-            data: value.2,
-            consume_listeners: Vec::new()
+            data,
+            attachments: Attachments::new()
         }
     }
 }
 
-impl<T> Exchange<T>
-where
-    T: Send + Sync,
-{
+impl<T: Send + Sync> From<(Uuid, InnerData<T>)> for Exchange<T> {
+    fn from(value: (Uuid, InnerData<T>)) -> Self {
+        Self {
+            uuid: value.0,
+            consume_listeners: Vec::new(),
+            inner: value.1
+        }
+    }
+}
+
+impl<T: Send + Sync> Exchange<T> {
     /// Creates a new exchange instance with a randomly generated UUID.
     pub fn new(data: T) -> Self {
         Self {
             uuid: Uuid::new_v4(),
-            data,
             consume_listeners: Vec::new(),
-            attachments: Attachments::new(),
+            inner: InnerData {
+                data,
+                attachments: Attachments::new()
+            }
         }
     }
 
     /// Returns a reference to the exchange's unique identifier.
-    pub fn uuid(&self) -> &Uuid {
-        &self.uuid
+    pub fn uuid(&self) -> Uuid {
+        self.uuid
     }
 
     /// Returns a reference to the attachments' collection.
     pub fn attachments(&self) -> &Attachments {
-        &self.attachments
+        &self.inner.attachments
     }
 
     /// Returns a mutable reference to the attachments' collection.
     pub fn attachments_mut(&mut self) -> &mut Attachments {
-        &mut self.attachments
+        &mut self.inner.attachments
     }
 
     /// Retrieves a reference to the stored input data.
     pub fn data(&self) -> &T {
-        //        match &self.data {
-        //            Some(val) => Ok(val),
-        //            None => Err(ExchangeError::read_error(&self.uuid, "No data available")),
-        //        }
-        &self.data
+        &self.inner.data
     }
 
+    /// Returns a mutable reference to the stored input data.
     pub fn data_mut(&mut self) -> &mut T {
-        //        match &mut self.data {
-        //            Some(val) => Ok(val),
-        //            None => Err(ExchangeError::read_error(&self.uuid, "No input available"))
-        //        }
-        &mut self.data
+        &mut self.inner.data
     }
 
     /// Adds a callback listener for data processing.
@@ -89,88 +89,17 @@ where
     }
 
     /// Consumes and returns the stored data, executing all listeners for this exchange.
-    /// 
-    pub fn take_data(mut self) -> (Uuid, Attachments, T) {
+    ///
+    pub fn take_data(mut self) -> (Uuid, InnerData<T>) {
         let uuid = self.uuid;
-        let mut val = self.data;
-        let mut attachments = self.attachments;
+        let InnerData {
+            data: val,
+            attachments
+        } = &mut self.inner;
         self.consume_listeners
             .drain(..)
-            .for_each(|mut listener| listener.invoke(&mut val, &mut attachments));
-        (uuid, attachments, val)
-    }
-}
-
-pub struct Attachments {
-    attachments: HashMap<AttachmentKey, Box<dyn Any + Send + Sync>, fnv::FnvBuildHasher>,
-}
-
-impl Attachments {
-    /// Creates a new empty attachments' collection.
-    pub fn new() -> Self {
-        Self {
-            attachments: HashMap::with_hasher(fnv::FnvBuildHasher::default()),
-        }
-    }
-
-    /// Adds a typed value to the attachment collection.
-    ///
-    /// # Parameters
-    /// - `key`: A string-like key that can be converted via `AsRef<str>`
-    /// - `value`: A value of type `K` that implements `Send + Sync + 'static`
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::Attachments;
-    ///
-    /// let mut attachments = Attachments::new();
-    /// attachments.add::<u32>("user_id", 123u32);
-    /// attachments.add::<String>("username", "alice".to_string());
-    /// ```
-    pub fn add<K>(&mut self, key: impl AsRef<str>, value: K)
-    where
-        K: Send + Sync + 'static,
-    {
-        let type_id = TypeId::of::<K>();
-        self.attachments
-            .insert(AttachmentKey::new(key, type_id), Box::new(value));
-    }
-
-    /// Retrieves a reference to a typed attachment.
-    ///
-    /// # Examples
-    /// ```rust
-    /// use idemio::exchange::Attachments;
-    ///
-    /// let mut attachments = Attachments::new();
-    /// attachments.add::<u32>("user_id", 123u32);
-    ///
-    /// let user_id: Option<&u32> = attachments.get("user_id");
-    /// assert_eq!(user_id, Some(&123));
-    /// ```
-    pub fn get<K>(&self, key: impl AsRef<str>) -> Option<&K>
-    where
-        K: Send + 'static,
-    {
-        let type_id = TypeId::of::<K>();
-        if let Some(option_any) = self.attachments.get(&AttachmentKey::new(key, type_id)) {
-            option_any.downcast_ref::<K>()
-        } else {
-            None
-        }
-    }
-
-    /// Retrieves a mutable reference to a typed value.
-    pub fn get_mut<K>(&mut self, key: impl AsRef<str>) -> Option<&mut K>
-    where
-        K: Send + 'static,
-    {
-        let type_id = TypeId::of::<K>();
-        if let Some(option_any) = self.attachments.get_mut(&AttachmentKey::new(key, type_id)) {
-            option_any.downcast_mut::<K>()
-        } else {
-            None
-        }
+            .for_each(|mut listener| listener.invoke(val, attachments));
+        (uuid, self.inner)
     }
 }
 
@@ -204,7 +133,7 @@ impl ExchangeError {
     }
 
     #[inline]
-    pub(crate) fn take_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+    pub fn take_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
         ExchangeError::Take {
             uuid: *uuid,
             message: msg.into(),
@@ -212,33 +141,11 @@ impl ExchangeError {
     }
 
     #[inline]
-    pub(crate) fn callback_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
+    pub fn callback_error(uuid: &Uuid, msg: impl Into<String>) -> Self {
         ExchangeError::Callback {
             uuid: *uuid,
             message: msg.into(),
         }
-    }
-}
-
-#[derive(PartialOrd, PartialEq, Hash, Eq)]
-pub struct AttachmentKey {
-    key_hash: u64,
-    type_hash: u64,
-}
-
-impl AttachmentKey {
-    pub fn new(key: impl AsRef<str>, type_id: TypeId) -> Self {
-        let key_hash = Self::hash(key.as_ref());
-        let type_hash = Self::hash(type_id);
-        Self {
-            key_hash,
-            type_hash,
-        }
-    }
-    fn hash(in_string: impl Hash) -> u64 {
-        let mut hasher = FnvHasher::default();
-        in_string.hash(&mut hasher);
-        hasher.finish()
     }
 }
 
@@ -261,33 +168,4 @@ where
     }
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::exchange::Attachments;
 
-    struct TestStruct;
-
-    #[test]
-    fn test_attachments() {
-        let mut attachments = Attachments::new();
-        let key1 = "test_key1";
-        let key2 = "test_key2";
-        let key3 = "test_key3";
-        let key4 = "test_key4";
-        {
-            attachments.add::<u64>(key1, 1);
-            attachments.add::<String>(key2, String::from("test"));
-            attachments.add::<bool>(key3, true);
-            let test_struct = TestStruct;
-            attachments.add::<TestStruct>(key4, test_struct);
-        }
-
-        {
-            assert!(attachments.get::<u64>(key1).is_some());
-            assert!(attachments.get::<String>(key2).is_some());
-            assert!(attachments.get::<bool>(key3).is_some());
-            assert!(attachments.get::<TestStruct>(key4).is_some());
-        }
-    }
-}

@@ -4,22 +4,20 @@ use async_trait::async_trait;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use thiserror::Error;
-use crate::exchange::{Attachments, Exchange, ExchangeError};
+use crate::exchange::{Exchange, ExchangeError, InnerData};
+use crate::attachments::Attachments;
 
 pub use registry::{HandlerRegistryError, HandlerRegistry};
-pub type HandlerResponse = Result<HandlerFlow, HandlerError>;
+pub type MiddlewareResult = Result<MiddlewareResponse, HandlerError>;
 
-
-pub trait LabeledHandler {
-    fn id(&self) -> &'static str;
-}
+pub trait LabeledHandler {}
 
 #[async_trait]
 pub trait MiddlewareHandler<T>: LabeledHandler + Send + Sync
 where
     T: Send + Sync
 {
-    async fn exec(&self, exchange: &mut Exchange<T>) -> HandlerResponse;
+    async fn exec(&self, exchange: &mut Exchange<T>) -> MiddlewareResult;
 }
 
 #[async_trait]
@@ -28,23 +26,23 @@ where
     I: Send + Sync,
     O: Send + Sync
 {
-    async fn exec(&self, attachments: &mut Attachments, input: I) -> Result<O, HandlerError>;
+    async fn exec(&self, data: InnerData<I>) -> Result<InnerData<O>, HandlerError>;
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum HandlerFlow {
+pub enum MiddlewareResponse {
     #[default]
     Continue,
     Break
 }
 
-impl HandlerFlow {
+impl MiddlewareResponse {
     #[inline]
-    pub const fn ok() -> HandlerResponse {
+    pub const fn ok() -> MiddlewareResult {
         Ok(Self::Continue)
     }
     #[inline]
-    pub const fn stop() -> HandlerResponse {
+    pub const fn stop() -> MiddlewareResult {
         Ok(Self::Break)
     }
 }

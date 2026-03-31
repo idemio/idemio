@@ -12,18 +12,18 @@ use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use idemio::config::{Config, ProgrammaticConfigProvider};
-use idemio::exchange::{Attachments, Exchange};
+use idemio::exchange::{Exchange, InnerData};
 use idemio::handler::{
-    HandlerError, HandlerFlow, HandlerId, HandlerRegistry, HandlerResponse, LabeledHandler,
-    MiddlewareHandler, TerminationHandler,
+    HandlerError, HandlerId, HandlerRegistry, LabeledHandler, MiddlewareHandler,
+    MiddlewareResponse, MiddlewareResult, TerminationHandler,
+};
+use idemio::router::builder::{
+    MethodBuilder, RouteBuilder, ServiceBuilder, SingleServiceConfigBuilder,
 };
 use idemio::router::{
-    HttpPathMethodMatcher, MethodBuilder, RouteBuilder, RouteKey, RouteKeyMatcher, RouteKeyParser,
-    Router, RouterError, ServiceBuilder, SingleServiceConfigBuilder,
+    HttpPathMethodMatcher, RouteKey, RouteKeyMatcher, RouteKeyParser, Router, RouterError,
 };
 use idemio::Handler;
-use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
 type HyperRequest = Request<BoxBody<Bytes, std::io::Error>>;
@@ -56,39 +56,26 @@ impl<T> MiddlewareHandler<T> for IdempotentLoggingHandler
 where
     T: Send + Sync,
 {
-    async fn exec(&self, exchange: &mut Exchange<T>) -> HandlerResponse {
+    async fn exec(&self, exchange: &mut Exchange<T>) -> MiddlewareResult {
         println!("uuid={}", exchange.uuid().to_string());
-        HandlerFlow::ok()
+        MiddlewareResponse::ok()
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-struct GreetingHandlerConfig {
-    response_text: String,
-}
-
 #[derive(Debug, Handler)]
-struct GreetingHandler {
-    config: Config<GreetingHandlerConfig>,
-}
+struct GreetingHandler;
 
 #[async_trait]
 impl TerminationHandler<HyperRequest, HyperResponse> for GreetingHandler {
     async fn exec(
         &self,
-        _attachments: &mut Attachments,
-        exchange: HyperRequest,
-    ) -> Result<HyperResponse, HandlerError> {
-        let (parts, body) = exchange.into_parts();
+        exchange: InnerData<HyperRequest>,
+    ) -> Result<InnerData<HyperResponse>, HandlerError> {
+        let (parts, body) = exchange.data.into_parts();
         let input_bytes = collect_body(body).await;
         let input_str = String::from_utf8_lossy(&input_bytes).to_string();
-        let response_text = &self.config.get().response_text;
-        let response = if input_str.trim().is_empty() {
-            response_text.clone()
-        } else {
-            format!("{} {}", response_text, input_str.trim())
-        };
-        let response_bytes = Bytes::from(response.into_bytes());
+        let response = "Hello World!";
+        let response_bytes = Bytes::from(response.as_bytes());
         let body = Full::new(response_bytes)
             .map_err(|_| unreachable!("Infallible"))
             .boxed();
@@ -96,36 +83,22 @@ impl TerminationHandler<HyperRequest, HyperResponse> for GreetingHandler {
             .status(StatusCode::OK)
             .body(body)
             .unwrap();
-        Ok(response)
+        Ok(InnerData::new(response))
     }
 }
-
-#[derive(Debug, Default, Deserialize, Serialize, Clone)]
-struct EchoHandlerConfig {
-    reverse: bool,
-}
-
 #[derive(Debug, Handler)]
-struct EchoHandler {
-    config: Config<EchoHandlerConfig>,
-}
+struct EchoHandler;
 
 #[async_trait]
 impl TerminationHandler<HyperRequest, HyperResponse> for EchoHandler {
     async fn exec(
         &self,
-        _attachments: &mut Attachments,
-        request: HyperRequest,
-    ) -> Result<HyperResponse, HandlerError> {
-        let (parts, body) = request.into_parts();
+        request: InnerData<HyperRequest>,
+    ) -> Result<InnerData<HyperResponse>, HandlerError> {
+        let (parts, body) = request.data.into_parts();
         let input_bytes = collect_body(body).await;
         let input_str = String::from_utf8_lossy(&input_bytes).to_string();
-        let processed_input = if self.config.get().reverse {
-            input_str.chars().rev().collect()
-        } else {
-            input_str
-        };
-
+        let processed_input: String = input_str.chars().rev().collect();
         let response = format!("Echo: {}", processed_input);
         let response_bytes = Bytes::from(response.into_bytes());
         let mut response_header = HeaderMap::new();
@@ -149,7 +122,7 @@ impl TerminationHandler<HyperRequest, HyperResponse> for EchoHandler {
             .status(StatusCode::OK)
             .body(body)
             .unwrap();
-        Ok(response)
+        Ok(InnerData::new(response))
     }
 }
 
@@ -158,39 +131,21 @@ fn create_router() -> HyperRouter {
     let mut handler_registry = HandlerRegistry::new();
 
     // Register greeting handler
-    let greeting_handler_id = HandlerId::new("greeting_handler");
-    let config = Config::new(ProgrammaticConfigProvider {
-        config: GreetingHandlerConfig {
-            response_text: "Hello, World!".to_string(),
-        },
-    })
-    .unwrap();
-
-    let handler = GreetingHandler {
-        config,
-    };
     handler_registry
-        .register_termination_handler(greeting_handler_id, handler)
+        .register_termination_handler(GreetingHandler::handler_id(), GreetingHandler)
         .unwrap();
 
     // Register echo handler
-    let echo_handler_id = HandlerId::new("echo_handler");
-    let config = Config::new(ProgrammaticConfigProvider {
-        config: EchoHandlerConfig { reverse: true },
-    })
-    .unwrap();
-    let handler = EchoHandler {
-        config,
-    };
     handler_registry
-        .register_termination_handler(echo_handler_id, handler)
+        .register_termination_handler(EchoHandler::handler_id(), EchoHandler)
         .unwrap();
 
     // Register idempotent logging handler
-    let idempotent_logging_handler_id = HandlerId::new("idempotent_logging_handler");
-    let handler = IdempotentLoggingHandler;
     handler_registry
-        .register_request_handler(idempotent_logging_handler_id, handler)
+        .register_request_handler(
+            IdempotentLoggingHandler::handler_id(),
+            IdempotentLoggingHandler,
+        )
         .unwrap();
 
     let router_config = SingleServiceConfigBuilder::new()
