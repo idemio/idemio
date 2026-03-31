@@ -4,5 +4,5 @@ members = [
     "idemio",
     "idemio-macro",
     "examples/*"
-]
+, "idemio-config"]
 

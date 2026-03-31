@@ -13,6 +13,7 @@
       <sourceFolder url="file://$MODULE_DIR$/examples/stream_example/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/examples/tcp_echo/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/examples/tcp_echo/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/idemio-config/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
       <excludeFolder url="file://$MODULE_DIR$/idemio/target" />
     </content>

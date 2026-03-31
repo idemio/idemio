@@ -20,31 +20,15 @@ pub enum HandlerRegistryError {
 impl HandlerRegistryError {
     /// Creates a new `MissingHandler` error with the specified handler ID.
     #[inline]
-    pub(crate) const fn missing_handler(id: HandlerId) -> Self {
+    pub const fn missing_handler(id: HandlerId) -> Self {
         Self::MissingHandler { handler_id: id }
     }
 
     /// Creates a new `ConflictingHandlerId` error with the specified handler ID.
     #[inline]
-    pub(crate) const fn conflicting_handler_id(id: HandlerId) -> Self {
+    pub const fn conflicting_handler_id(id: HandlerId) -> Self {
         Self::ConflictingHandlerId { handler_id: id }
     }
-}
-
-/// A generic trait for registry implementations that manage typed items with handler IDs.
-pub trait Registry<T>
-where
-    T: Send + Sync,
-{
-    /// Retrieves an item from the registry by its handler ID.
-    fn find_with_id(&self, id: &HandlerId) -> Result<Arc<T>, HandlerRegistryError>;
-
-    /// Registers a new item in the registry with the specified handler ID.
-    fn register_handler(
-        &mut self,
-        handler_id: &HandlerId,
-        handler: T,
-    ) -> Result<(), HandlerRegistryError>;
 }
 
 /// A thread-safe registry for managing handler instances with unique identifiers.

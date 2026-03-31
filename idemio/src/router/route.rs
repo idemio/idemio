@@ -1,9 +1,3 @@
-use std::hash::Hash;
-
-//pub trait RouteKey<I>: Hash
-//{
-//    fn into(input: &I) -> Self;
-//}
 #[derive(Default)]
 pub struct RouteKey<'a> {
     pub path: Option<&'a str>,

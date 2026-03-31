@@ -1438,6 +1438,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "idemio-config"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "idemio-macro"
 version = "0.1.0"
 dependencies = [

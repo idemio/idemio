@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use crate::router::config::{PathChain, RouteType, SharedConfig};
+use crate::router::config::{PathChain};
 use crate::router::RouterConfig;
 
 #[derive(Default)]
@@ -229,23 +229,16 @@ pub trait MethodBuilder: Sized {
 ///
 /// This builder creates configurations for single-service routing scenarios,
 /// which is the most common use case for simple applications.
+#[derive(Default)]
 pub struct SingleServiceConfigBuilder {
     /// Core configuration being built
     core: ServiceConfigCore,
 }
 
-impl Default for SingleServiceConfigBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SingleServiceConfigBuilder {
     /// Create a new single service configuration builder
     pub fn new() -> Self {
-        Self {
-            core: ServiceConfigCore::new(),
-        }
+        Self::default()
     }
 
     /// Build the final router configuration
@@ -328,149 +321,6 @@ impl MethodBuilder for SingleServiceMethodBuilder {
     }
 }
 
-/// Builder for shared multiservice configurations
-///
-/// This builder creates configurations for complex routing scenarios where
-/// multiple services need different routing strategies.
-pub struct SharedConfigBuilder {
-    /// The routing key type
-    key: RouteType,
-    /// Map of services being configured
-    services: HashMap<String, RouterConfig>,
-}
-
-impl SharedConfigBuilder {
-    /// Create a new shared configuration builder
-    pub fn new() -> Self {
-        Self {
-            key: RouteType::None,
-            services: HashMap::new(),
-        }
-    }
-
-    /// Set the routing type for service selection
-    pub fn route_type(mut self, route_type: RouteType) -> Self {
-        self.key = route_type;
-        self
-    }
-
-    /// Start configuring a specific service
-    pub fn service(self, service_name: impl Into<String>) -> SharedServiceBuilder {
-        SharedServiceBuilder {
-            shared_builder: self,
-            service_name: service_name.into(),
-            core: ServiceConfigCore::new(),
-        }
-    }
-
-    /// Build the final shared configuration
-    ///
-    /// # Returns
-    ///
-    /// A complete `SharedConfig` ready for use
-    pub fn build(self) -> SharedConfig {
-        SharedConfig {
-            key: self.key,
-            services: self.services,
-        }
-    }
-}
-
-/// Service builder for shared configurations
-pub struct SharedServiceBuilder {
-    /// Parent shared configuration builder
-    shared_builder: SharedConfigBuilder,
-    /// Name of the service being configured
-    service_name: String,
-    /// Core configuration for this service
-    core: ServiceConfigCore,
-}
-
-impl SharedServiceBuilder {
-    /// Finish configuring this service and return to the shared builder
-    pub fn end_service(mut self) -> SharedConfigBuilder {
-        let config = self.core.build();
-        self.shared_builder
-            .services
-            .insert(self.service_name, config);
-        self.shared_builder
-    }
-}
-
-impl ServiceBuilder for SharedServiceBuilder {
-    type RouteBuilder = SharedServiceRouteBuilder;
-
-    fn core(&mut self) -> &mut ServiceConfigCore {
-        &mut self.core
-    }
-
-    fn route(mut self, path: impl Into<String>) -> Self::RouteBuilder {
-        let path_str = path.into();
-        self.core.ensure_route_exists(&path_str);
-        SharedServiceRouteBuilder {
-            service_builder: self,
-            current_path: path_str,
-        }
-    }
-}
-
-/// Route builder for shared service configurations
-pub struct SharedServiceRouteBuilder {
-    /// Parent service builder
-    service_builder: SharedServiceBuilder,
-    /// Path being configured
-    current_path: String,
-}
-
-impl RouteBuilder for SharedServiceRouteBuilder {
-    type MethodBuilder = SharedServiceMethodBuilder;
-    type ServiceBuilder = SharedServiceBuilder;
-
-    fn create_method_builder(self, method: impl Into<String>) -> Self::MethodBuilder {
-        SharedServiceMethodBuilder {
-            route_builder: self,
-            method: method.into(),
-            path_chain: PathChain::new(),
-        }
-    }
-
-    fn end_route(self) -> Self::ServiceBuilder {
-        self.service_builder
-    }
-}
-
-/// Method builder for shared service configurations
-pub struct SharedServiceMethodBuilder {
-    /// Parent route builder
-    route_builder: SharedServiceRouteBuilder,
-    /// HTTP method being configured
-    method: String,
-    /// Path chain being built
-    path_chain: PathChain,
-}
-
-impl MethodBuilder for SharedServiceMethodBuilder {
-    type RouteBuilder = SharedServiceRouteBuilder;
-
-    fn path_chain(&mut self) -> &mut PathChain {
-        &mut self.path_chain
-    }
-
-    fn chains(&self) -> &HashMap<String, Vec<String>> {
-        &self.route_builder.service_builder.core.chains
-    }
-
-    fn end_method(self) -> Self::RouteBuilder {
-        let mut route_builder = self.route_builder;
-        route_builder.service_builder.core.add_method(
-            &route_builder.current_path,
-            self.method,
-            self.path_chain,
-        );
-        route_builder
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -496,25 +346,6 @@ mod tests {
 
             assert!(config.handlers.contains("handler1"));
             assert!(config.handlers.contains("handler2"));
-        }
-
-    /// Test shared service configuration building
-    #[test]
-    #[rustfmt::skip]
-        fn test_shared_service_multiple_methods_same_route() {
-            let config = SharedConfigBuilder::new()
-                .route_type(RouteType::path())
-                .service("service1")
-                    .handler("handler1")
-                    .route("/api/test")
-                        .get()
-                            .termination_handler("handler1")
-                        .end_method()
-                    .end_route()
-                .end_service()
-                .build();
-
-            assert!(config.services.contains_key("service1"));
         }
 
     /// Test fluent builder chaining
